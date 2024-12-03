@@ -39,6 +39,11 @@
 #include <immintrin.h>
 #endif
 
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
+
+
 /* The HyperLogLog implementation is based on the following ideas:
  *
  * * The use of a 64 bit hash function as proposed in [1], in order to estimate
@@ -218,6 +223,7 @@ static int simd_enabled = 1;
 #else
 #define HLL_USE_AVX2 0
 #endif
+
 
 /* =========================== Low level bit macros ========================= */
 
@@ -1075,6 +1081,23 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     }
 }
 
+#ifdef __aarch64__
+void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
+    uint8x16_t x0 = vld1q_u8(reg_raw);
+    uint8x16_t x1 = vld1q_u8(reg_raw + 16);
+    uint8x16_t d0 = vld1q_u8(reg_dense);
+    uint8x16_t d1 = vld1q_u8(reg_dense + 16);
+
+    /* Perform NEON-specific max operation */
+    x0 = vmaxq_u8(x0, d0);
+    x1 = vmaxq_u8(x1, d1);
+
+    /* Store results back */
+    vst1q_u8(reg_raw, x0);
+    vst1q_u8(reg_raw + 16, x1);
+}
+#endif
+
 #ifdef HAVE_AVX2
 /* A specialized version of hllMergeDense, optimized for default configurations.
  *
@@ -1196,6 +1219,10 @@ void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
     }
 #endif
 
+#ifdef __aarch64__
+    hllMergeDenseNEON(reg_raw, reg_dense);
+#endif
+
     uint8_t val;
     for (int i = 0; i < HLL_REGISTERS; i++) {
         HLL_DENSE_GET_REGISTER(val, reg_dense, i);
@@ -1249,6 +1276,17 @@ int hllMerge(uint8_t *max, robj *hll) {
     }
     return C_OK;
 }
+
+#ifdef __aarch64__
+void hllCompressDenseNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
+    uint8x16_t x0 = vld1q_u8(reg_raw);
+    uint8x16_t x1 = vld1q_u8(reg_raw + 16);
+
+    /* Perform NEON-specific shuffle (no-op for dense copy) */
+    vst1q_u8(reg_dense, x0);
+    vst1q_u8(reg_dense + 16, x1);
+}
+#endif
 
 #ifdef HAVE_AVX2
 /* A specialized version of hllDenseCompress, optimized for default configurations.
@@ -1358,6 +1396,9 @@ void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
             return;
         }
     }
+#endif
+#ifdef __aarch64__
+    hllCompressDenseNEON(reg_dense, reg_raw);
 #endif
 
     for (int i = 0; i < HLL_REGISTERS; i++) {
