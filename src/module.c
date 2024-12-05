@@ -2255,6 +2255,27 @@ int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd) {
     return (cp->module == module_handle);
 }
 
+/* ValkeyModule_UpdateRuntimeArgs can be used to update the module argument values.
+ * The function parameter 'argc' indicates the number of updated arguments, and 'argv'
+ * represents the values of the updated arguments.
+ * Once 'CONFIG REWRITE' command is called, the updated argument values can be saved into conf file.
+ *
+ * The function always returns VALKEYMODULE_OK. */
+int VM_UpdateRuntimeArgs(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    struct moduleLoadQueueEntry *loadmod = ctx->module->loadmod;
+    for (int i = 0; i < loadmod->argc; i++) {
+        decrRefCount(loadmod->argv[i]);
+    }
+    zfree(loadmod->argv);
+    loadmod->argv = argc - 1 ? zmalloc(sizeof(robj *) * (argc - 1)) : NULL;
+    loadmod->argc = argc - 1;
+    for (int i = 1; i < argc; i++) {
+        loadmod->argv[i - 1] = argv[i];
+        incrRefCount(loadmod->argv[i - 1]);
+    }
+    return VALKEYMODULE_OK;
+}
+
 /* --------------------------------------------------------------------------
  * ## Module information and time measurement
  * -------------------------------------------------------------------------- */
@@ -13560,6 +13581,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetModuleAttribs);
     REGISTER_API(IsModuleNameBusy);
     REGISTER_API(WrongArity);
+    REGISTER_API(UpdateRuntimeArgs);
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);
