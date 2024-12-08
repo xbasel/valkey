@@ -980,6 +980,13 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {valkey-server command line arguments - dir multiple times} {
+        start_server {config "default.conf" args {--dir "./" --dir "./"}} {
+            r config get dir
+            assert_equal {PONG} [r ping]
+        }
+    } {} {external:skip}
+
     # Config file at this point is at a weird state, and includes all
     # known keywords. Might be a good idea to avoid adding tests here.
 }
