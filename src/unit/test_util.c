@@ -296,11 +296,11 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     if (flags & UNIT_TEST_VALGRIND) return 0;
 
 #if defined(__linux__)
-    struct statfs buf;
+    struct statfs stats;
 
     /* Check if /tmp is memory-backed (e.g., tmpfs) */
-    if (statfs("/tmp", &buf) == 0) {
-        if (buf.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
+    if (statfs("/tmp", &stats) == 0) {
+        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
             return 0;
         }
     }
