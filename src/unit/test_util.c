@@ -314,7 +314,6 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     }
     
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
-
     int fd = open(tmpfile, O_RDWR | O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
 
