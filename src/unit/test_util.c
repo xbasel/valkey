@@ -1,12 +1,15 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/statfs.h>
-#include <linux/magic.h>
 
 #include "../config.h"
 #include "../util.h"
 #include "test_help.h"
+
+#if defined(__linux__)
+#include <sys/statfs.h>
+#include <linux/magic.h>
+#endif
 
 int test_string2ll(int argc, char **argv, int flags) {
     UNUSED(argc);
@@ -285,22 +288,6 @@ static int cache_exist(int fd) {
 }
 #endif
 
-/**
- * Check if /tmp/ is disk-based
- * This is required because we are testing fadvise(FADV_DONTNEED), which operates on disk-backed files.
- */
-int is_tmp_disk_based(void) {
-    struct statfs buf;
-
-    /* Check if /tmp is memory-backed (e.g., tmpfs) */
-    if (statfs("/tmp", &buf) == 0) {
-        if (buf.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
-            return 0;
-        }
-    }
-    return 1;
-}
-
 int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
@@ -309,10 +296,15 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     if (flags & UNIT_TEST_VALGRIND) return 0;
 
 #if defined(__linux__)
-    if (!is_tmp_disk_based()) {
-        return 0; // Can not be tested on a ram drive.
+    struct statfs buf;
+
+    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    if (statfs("/tmp", &buf) == 0) {
+        if (buf.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
+            return 0;
+        }
     }
-    
+
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR | O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
