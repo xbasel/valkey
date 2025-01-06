@@ -1687,6 +1687,8 @@ struct valkeyServer {
                                             * Value: RDB client object
                                             * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
+    keyAccessContext access_context;        /* The current key access context */
+
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
@@ -2612,6 +2614,7 @@ typedef struct {
 
 #define OBJ_HASH_FIELD 1
 #define OBJ_HASH_VALUE 2
+#define OBJ_HASH_EXPIRY
 
 /*-----------------------------------------------------------------------------
  * Extern declarations
@@ -3292,6 +3295,9 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
+void setAccessContext(robj *o, serverDb *db);
+void setAccessContextWithFlags(robj *o, serverDb *db, int flags);
+void resetAccessContext(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

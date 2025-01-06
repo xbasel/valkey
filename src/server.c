@@ -679,6 +679,12 @@ size_t hashHashtableTypeMetadataSize(void) {
 
 extern hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry);
 
+size_t hashHashtableTypeMetadataSize(void) {
+    return sizeof(void *);
+}
+
+extern hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry);
+
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
@@ -7363,7 +7369,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[1] == 'f' || opt[1] == 'F') &&
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
-                   next && 
+                   next &&
                    !(*flags & OBJ_SET_NX || *flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
         {
             *flags |= OBJ_SET_IFEQ;

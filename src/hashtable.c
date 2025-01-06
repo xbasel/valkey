@@ -45,6 +45,7 @@
  * - The original scan algorithm was designed by Pieter Noordhuis.
  */
 #include "hashtable.h"
+#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
@@ -883,6 +884,25 @@ static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_ind
         /* Bucket is full. Move forward to next bucket. */
         b = next;
     }
+}
+
+static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem, bucket *b, int pos_in_bucket, int table_index) {
+    if (ht->type->accessElement == NULL) return ELEMENT_VALID;
+
+    hashtableElementAccessState element_status = ht->type->accessElement(ht, elem);
+    serverLog(LL_NOTICE, "hashtable access returned: %d", element_status);
+    if (element_status == ELEMENT_DELETE) {
+        b->presence &= ~(1 << pos_in_bucket);
+        ht->used[table_index]--;
+        if (b->chained && !hashtableIsRehashingPaused(ht)) {
+            /* Rehashing is paused while iterating and when a scan callback is
+             * running. In those cases, we do the compaction in the scan and
+             * iterator code instead. */
+            fillBucketHole(ht, b, pos_in_bucket, table_index);
+        }
+        hashtableShrinkIfNeeded(ht);
+    }
+    return element_status;
 }
 
 /* Find an empty position in the table for inserting an entry with the given hash. */
@@ -2037,6 +2057,9 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
             /* No entry here. */
+            continue;
+        }
+        if (accessElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket], b, iter->pos_in_bucket, iter->table) != ELEMENT_VALID) {
             continue;
         }
         if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ENTRY_VALID) {

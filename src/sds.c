@@ -39,6 +39,10 @@
 #include "sdsalloc.h"
 #include "util.h"
 
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 const char *SDS_NOINIT = "SDS_NOINIT";
 
 int sdsHdrSize(char type) {

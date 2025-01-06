@@ -1,6 +1,7 @@
 #ifndef VOLATILESET_H
 #define VOLATILESET_H
 
+#include "fmacros.h"
 #include <stddef.h>
 #include "rax.h"
 #include "sds.h"
