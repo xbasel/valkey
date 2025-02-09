@@ -39,6 +39,7 @@
 
 #include "crcspeed.h"
 #include "crccombine.h"
+#include "server.h"
 
 #define CRC64_LEN_MASK UINT64_C(0x7ffffffffffffff8)
 #define CRC64_REVERSED_POLY UINT64_C(0x95ac9329ac4bc9b5)
@@ -171,6 +172,40 @@ void set_crc64_cutoffs(size_t dual_cutoff, size_t tri_cutoff) {
     CRC64_TRI_CUTOFF = tri_cutoff;
 }
 
+#include <immintrin.h>   // For AVX, SSE, and PCLMULQDQ
+#include <wmmintrin.h>   // For PCLMULQDQ (Carry-Less Multiplication)
+#include <smmintrin.h>   // For `_mm_extract_epi32()` (SSE4.1)
+#include <tmmintrin.h>   // For SSSE3 intrinsics
+
+
+
+uint64_t crcspeed64_pclmul(uint64_t crc, void *buf, size_t len) {
+    __m128i crc128 = _mm_set_epi64x(crc, 0); // Properly initialize CRC
+    // __m128i poly = _mm_set_epi64x(0, 0xC96C5795D7870F42); // Correct CRC-64 polynomial
+    __m128i poly = _mm_set_epi64x(0, CRC64_REVERSED_POLY); // Correct CRC-64 polynomial
+
+    uint8_t *next = (uint8_t *)buf;
+    while (len >= 8) {
+        uint64_t data;
+        memcpy(&data, next, 8); // Ensure correct memory access
+        __m128i block = _mm_cvtsi64_si128(data); // Load 64-bit data
+        crc128 = _mm_xor_si128(crc128, block);
+        crc128 = _mm_clmulepi64_si128(crc128, poly, 0x00); // Carry-less multiply
+        next += 8;
+        len -= 8;
+    }
+
+    // **Manual Reduction Step**
+    __m128i t1 = _mm_srli_si128(crc128, 8);
+    crc128 = _mm_xor_si128(crc128, t1);
+
+    uint64_t res = _mm_cvtsi128_si64(crc128); // Extract full 64-bit CRC
+    return res;
+}
+
+
+
+
 /* Calculate a non-inverted CRC multiple bytes at a time on a little-endian
  * architecture. If you need inverted CRC, invert *before* calling and invert
  * *after* calling.
@@ -178,78 +213,81 @@ void set_crc64_cutoffs(size_t dual_cutoff, size_t tri_cutoff) {
  */
 uint64_t crcspeed64little(uint64_t little_table[8][256], uint64_t crc1,
                           void *buf, size_t len) {
-    unsigned char *next1 = buf;
 
-    if (CRC64_DUAL_CUTOFF < 1) {
-        goto final;
-    }
-
-    /* process individual bytes until we reach an 8-byte aligned pointer */
-    while (len && ((uintptr_t)next1 & 7) != 0) {
-        crc1 = little_table[0][(crc1 ^ *next1++) & 0xff] ^ (crc1 >> 8);
-        len--;
-    }
-
-    if (len >  CRC64_TRI_CUTOFF) {
-        /* 24 bytes per loop, doing 3 parallel 8 byte chunks at a time */
-        unsigned char *next2, *next3;
-        uint64_t olen, crc2=0, crc3=0;
-        CRC64_SPLIT(3);
-        /* len is now the length of the first segment, the 3rd segment possibly
-         * having extra bytes to clean up at the end
-         */
-        next3 = next2 + len;
-        while (len >= 8) {
-            len -= 8;
-            DO_8_1(crc1, next1);
-            DO_8_1(crc2, next2);
-            DO_8_1(crc3, next3);
-            DO_8_2(crc1);
-            DO_8_2(crc2);
-            DO_8_2(crc3);
-        }
-
-        /* merge the 3 crcs */
-        MERGE_CRC(crc2);
-        MERGE_CRC(crc3);
-        MERGE_END(next3, 3);
-    } else if (len > CRC64_DUAL_CUTOFF) {
-        /* 16 bytes per loop, doing 2 parallel 8 byte chunks at a time */
-        unsigned char *next2;
-        uint64_t olen, crc2=0;
-        CRC64_SPLIT(2);
-        /* len is now the length of the first segment, the 2nd segment possibly
-         * having extra bytes to clean up at the end
-         */
-        while (len >= 8) {
-            len -= 8;
-            DO_8_1(crc1, next1);
-            DO_8_1(crc2, next2);
-            DO_8_2(crc1);
-            DO_8_2(crc2);
-        }
-
-        /* merge the 2 crcs */
-        MERGE_CRC(crc2);
-        MERGE_END(next2, 2);
-    }
-    /* We fall through here to handle our <CRC64_DUAL_CUTOFF inputs, and for any trailing
-     * bytes that wasn't evenly divisble by 16 or 24 above. */
-
-    /* fast processing, 8 bytes (aligned!) per loop */
-    while (len >= 8) {
-        len -= 8;
-        DO_8_1(crc1, next1);
-        DO_8_2(crc1);
-    }
-final:
-    /* process remaining bytes (can't be larger than 8) */
-    while (len) {
-        crc1 = little_table[0][(crc1 ^ *next1++) & 0xff] ^ (crc1 >> 8);
-        len--;
-    }
-
-    return crc1;
+    UNUSED(little_table);
+    return  crcspeed64_pclmul(crc1, buf, len);
+//     unsigned char *next1 = buf;
+//
+//     if (CRC64_DUAL_CUTOFF < 1) {
+//         goto final;
+//     }
+//
+//     /* process individual bytes until we reach an 8-byte aligned pointer */
+//     while (len && ((uintptr_t)next1 & 7) != 0) {
+//         crc1 = little_table[0][(crc1 ^ *next1++) & 0xff] ^ (crc1 >> 8);
+//         len--;
+//     }
+//
+//     if (len >  CRC64_TRI_CUTOFF) {
+//         /* 24 bytes per loop, doing 3 parallel 8 byte chunks at a time */
+//         unsigned char *next2, *next3;
+//         uint64_t olen, crc2=0, crc3=0;
+//         CRC64_SPLIT(3);
+//         /* len is now the length of the first segment, the 3rd segment possibly
+//          * having extra bytes to clean up at the end
+//          */
+//         next3 = next2 + len;
+//         while (len >= 8) {
+//             len -= 8;
+//             DO_8_1(crc1, next1);
+//             DO_8_1(crc2, next2);
+//             DO_8_1(crc3, next3);
+//             DO_8_2(crc1);
+//             DO_8_2(crc2);
+//             DO_8_2(crc3);
+//         }
+//
+//         /* merge the 3 crcs */
+//         MERGE_CRC(crc2);
+//         MERGE_CRC(crc3);
+//         MERGE_END(next3, 3);
+//     } else if (len > CRC64_DUAL_CUTOFF) {
+//         /* 16 bytes per loop, doing 2 parallel 8 byte chunks at a time */
+//         unsigned char *next2;
+//         uint64_t olen, crc2=0;
+//         CRC64_SPLIT(2);
+//         /* len is now the length of the first segment, the 2nd segment possibly
+//          * having extra bytes to clean up at the end
+//          */
+//         while (len >= 8) {
+//             len -= 8;
+//             DO_8_1(crc1, next1);
+//             DO_8_1(crc2, next2);
+//             DO_8_2(crc1);
+//             DO_8_2(crc2);
+//         }
+//
+//         /* merge the 2 crcs */
+//         MERGE_CRC(crc2);
+//         MERGE_END(next2, 2);
+//     }
+//     /* We fall through here to handle our <CRC64_DUAL_CUTOFF inputs, and for any trailing
+//      * bytes that wasn't evenly divisble by 16 or 24 above. */
+//
+//     /* fast processing, 8 bytes (aligned!) per loop */
+//     while (len >= 8) {
+//         len -= 8;
+//         DO_8_1(crc1, next1);
+//         DO_8_2(crc1);
+//     }
+// final:
+//     /* process remaining bytes (can't be larger than 8) */
+//     while (len) {
+//         crc1 = little_table[0][(crc1 ^ *next1++) & 0xff] ^ (crc1 >> 8);
+//         len--;
+//     }
+//
+//     return crc1;
 }
 
 /* clean up our namespace */
