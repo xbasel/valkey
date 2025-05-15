@@ -263,7 +263,7 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     if (!delete_expired) return ELEMENT_INVALID;
 
-    if (server.access_context.flags & OBJ_ACCESS_NONE) return ELEMENT_INVALID;
+    if (server.access_context.flags == OBJ_ACCESS_NONE) return ELEMENT_INVALID;
 
     robj *o = server.access_context.key;
     serverDb *db = server.access_context.db;
@@ -288,8 +288,8 @@ void hashTypeResetAccessContext(void) {
     if (o) {
         if (hashTypeLength(o) == 0) {
             initStaticStringObject(keyobj, objectGetKey(o));
-            dbDelete(db, &keyobj);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", &keyobj, db->id);
+            dbDelete(db, &keyobj);
         }
     }
 }
@@ -1763,7 +1763,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
 
-    robj *hash = lookupKeyRead(c->db, c->argv[1]);
+    hashTypeSetAccessContext(hash, c->db);
 
     if (checkType(c, hash, OBJ_HASH)) return;
 
