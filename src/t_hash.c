@@ -1336,6 +1336,8 @@ void hsetexCommand(client *c) {
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
+        }
+        when += commandTimeSnapshot();
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
