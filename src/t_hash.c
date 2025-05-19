@@ -596,6 +596,16 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return 0;
         } else {
+            if (expired) {
+                /* It is possible that the assigned expiration is set in the past (or zero).
+                 * In such case we cannot count on the hash object representation to be hashtable. */
+                if (hashTypeDelete(o, field)) {
+                    hashTypeExpireEntry(field);
+                    return 2;
+                } else {
+                    return -2;
+                }
+            }
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
@@ -1148,9 +1158,6 @@ void hgetCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
     addHashFieldToReply(c, o, c->argv[2]->ptr);
 
-    if (hashTypeLength(o) == 0) {
-        dbDelete(c->db, c->argv[1]);
-    }
     hashTypeResetAccessContext();
 }
 
@@ -1634,7 +1641,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
+            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index + 1) != C_OK) return;
+            fields_index++;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
