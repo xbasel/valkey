@@ -596,16 +596,6 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return 0;
         } else {
-            if (expired) {
-                /* It is possible that the assigned expiration is set in the past (or zero).
-                 * In such case we cannot count on the hash object representation to be hashtable. */
-                if (hashTypeDelete(o, field)) {
-                    hashTypeExpireEntry(field);
-                    return 2;
-                } else {
-                    return -2;
-                }
-            }
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
