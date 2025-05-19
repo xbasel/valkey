@@ -1787,6 +1787,8 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
 
     if (checkType(c, hash, OBJ_HASH)) return;
 
+    if (checkType(c, hash, OBJ_HASH)) return;
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
