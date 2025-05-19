@@ -1643,8 +1643,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index + 1) != C_OK) return;
-            fields_index++;
+            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
