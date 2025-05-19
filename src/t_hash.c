@@ -247,13 +247,14 @@ void hashTypePropagateDeletion(serverDb *db, sds key, void *entry) {
 }
 
 int hashTypeExpireEntry(void *entry) {
-    serverAssert(server.access_context.key && server.access_context.db);
-    robj keyobj;
-    sds key = objectGetKey(server.access_context.key);
-    serverAssert(key);
-    initStaticStringObject(keyobj, key);
-    notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", &keyobj, server.access_context.db->id);
-    serverLog(LL_NOTICE, "expiring entry %s of key %s", (sds)entry, key);
+    serverAssert(server.access_context.val && server.access_context.db);
+    robj *keyobj = server.access_context.key;
+    robj *o = server.access_context.val;
+    sds key = objectGetKey(o);
+    if (!keyobj) {
+        keyobj = createStringObject(key, sdslen(key));
+    }
+    notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, server.access_context.db->id);
     hashTypePropagateDeletion(server.access_context.db, key, entry);
     return 1;
 }
@@ -286,20 +287,23 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
     return ELEMENT_DELETE;
 }
 
-void hashTypeSetAccessContext(robj *o, serverDb *db) {
-    setAccessContext(o, db);
+void hashTypeSetAccessContext(robj *key, robj *val, serverDb *db) {
+    setAccessContext(key, val, db);
 }
 
 void hashTypeResetAccessContext(void) {
-    robj keyobj;
-    robj *o = server.access_context.key;
+    robj *keyobj = server.access_context.key;
+    robj *o = server.access_context.val;
     serverDb *db = server.access_context.db;
     serverAssert(!o || o->type == OBJ_HASH);
     resetAccessContext();
     if (o) {
         if (hashTypeLength(o) == 0) {
-            initStaticStringObject(keyobj, objectGetKey(o));
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", &keyobj, db->id);
+            if (!keyobj) {
+                sds key = objectGetKey(o);
+                keyobj = createStringObject(key, sdslen(key));
+            }
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
             dbDelete(db, &keyobj);
         }
     }
@@ -1035,7 +1039,7 @@ void hincrbyCommand(client *c) {
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    hashTypeSetAccessContext(o, c->db);
+    hashTypeSetAccessContext(c->argv[1], o, c->db);
     if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value) == C_OK) {
         if (vstr) {
             if (string2ll((char *)vstr, vlen, &value) == 0) {
@@ -1161,7 +1165,7 @@ void hmgetCommand(client *c) {
 
     if (checkType(c, o, OBJ_HASH)) return;
 
-    hashTypeSetAccessContext(o, c->db);
+    hashTypeSetAccessContext(c->argv[1], o, c->db);
 
     addReplyArrayLen(c, c->argc - 2);
     for (i = 2; i < c->argc; i++) {
@@ -1206,7 +1210,7 @@ void hstrlenCommand(client *c) {
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    hashTypeSetAccessContext(o, c->db);
+    hashTypeSetAccessContext(c->argv[1], o, c->db);
     addReplyLongLong(c, hashTypeGetValueLength(o, c->argv[2]->ptr));
     hashTypeResetAccessContext();
 }
