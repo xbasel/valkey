@@ -200,7 +200,7 @@ void hashTypeTrackEntry(robj *o, void *entry) {
     serverAssert(volatileSetAddEntry(set, entry, hashTypeEntryGetExpiry(entry)));
 }
 
-static void hashTypeUntrackEntry(robj *o, void *entry) {
+void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!hashTypeEntryHasExpire(entry)) return;
     volatile_set *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
@@ -288,7 +288,6 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     hashTypeUntrackEntry(o, entry);
     hashTypeExpireEntry(entry);
-    freeHashTypeEntry(entry);
     return ELEMENT_DELETE;
 }
 

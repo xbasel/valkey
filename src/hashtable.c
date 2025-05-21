@@ -900,6 +900,7 @@ static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, v
             fillBucketHole(ht, b, pos_in_bucket, table_index);
         }
         hashtableShrinkIfNeeded(ht);
+        freeEntry(ht, elem);
     }
     return element_status;
 }
