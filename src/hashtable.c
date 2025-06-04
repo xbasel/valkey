@@ -886,23 +886,9 @@ static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_ind
     }
 }
 
-static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem, bucket *b, int pos_in_bucket, int table_index) {
+static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem) {
     if (ht->type->accessElement == NULL) return ELEMENT_VALID;
-
-    hashtableElementAccessState element_status = ht->type->accessElement(ht, elem);
-    if (element_status == ELEMENT_DELETE) {
-        b->presence &= ~(1 << pos_in_bucket);
-        ht->used[table_index]--;
-        if (b->chained && !hashtableIsRehashingPaused(ht)) {
-            /* Rehashing is paused while iterating and when a scan callback is
-             * running. In those cases, we do the compaction in the scan and
-             * iterator code instead. */
-            fillBucketHole(ht, b, pos_in_bucket, table_index);
-        }
-        hashtableShrinkIfNeeded(ht);
-        freeEntry(ht, elem);
-    }
-    return element_status;
+    return ht->type->accessElement(ht, elem);
 }
 
 /* Find an empty position in the table for inserting an entry with the given hash. */
@@ -2059,7 +2045,7 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
             /* No entry here. */
             continue;
         }
-        if (accessElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket], b, iter->pos_in_bucket, iter->table) != ELEMENT_VALID) {
+        if (accessElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ELEMENT_VALID) {
             continue;
         }
         if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ENTRY_VALID) {
