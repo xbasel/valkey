@@ -136,7 +136,6 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     } else {
         mem += sdsReqSize(sdslen(entry), sdsType(entry));
         if (entryHasExpiry(entry)) mem += sizeof(long long);
-        if (entryHasMetadata(entry)) mem += (hashTypeEntryGetMetadataSize(entry) + sizeof(char));
     }
     mem += sdsAllocSize(hashTypeEntryGetValue(entry));
     return mem;
