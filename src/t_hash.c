@@ -203,6 +203,8 @@ hashTypeGetOrcreateVolatileSet(robj *o) {
 void hashTypeTrackEntry(robj *o, void *entry) {
     volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
     serverAssert(volatileSetAddEntry(set, entry, hashTypeEntryGetExpiry(entry)));
+    /* serves mainly for optimization. Use type which supports access function only when needed. */
+    hashtableSetType(o->ptr, &hashWithVolatileItemsHashtableType);
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
@@ -214,6 +216,8 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
         freeVolatileSet(set);
         volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
         *volatile_set_ref = NULL;
+        /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
+        hashtableSetType(o->ptr, &hashHashtableType);
     }
 }
 
