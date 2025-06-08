@@ -1296,6 +1296,7 @@ void databasesCron(void) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+            activeExpireCycleFields();
         }
     }
 
@@ -2819,6 +2820,7 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);

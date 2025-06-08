@@ -860,6 +860,7 @@ typedef struct serverDb {
     kvstore *keys;    /* The keyspace for this DB */
     kvstore *expires; /* Timeout of keys with a timeout set */
     kvstore *object_with_volatile_elements;
+    kvstore *keys_with_volatile_items;    /* Keys with volatile items */
     dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
     dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
                                            * data, and should be unblocked if key is deleted (XREADEDGROUP).
@@ -3337,13 +3338,14 @@ robj *setTypeDup(robj *o);
 
 
 void hashTypeFreeVolatileSet(robj *o);
-void hashTypeTrackEntry(robj *o, void *entry);
-void hashTypeUntrackEntry(robj *o, void *entry);
+volatile_set *hashTypeGetVolatileSet(robj *o);
+void hashTypeTrackEntry(serverDb* db, robj *o, void *entry);
+void hashTypeUntrackEntry(serverDb* db, robj *o, void *entry);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
 int hashTypeExists(robj *o, sds key);
-int hashTypeDelete(robj *o, sds key);
+int hashTypeDelete(serverDb* db, robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
@@ -3358,9 +3360,9 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
-robj *hashTypeDup(robj *o);
-bool hashTypeHasVolatileElements(robj *o);
+int hashTypeSet(serverDb*db, robj *o, sds field, sds value, long long expiry, int flags);
+robj *hashTypeDup(serverDb *db, robj *o);
+int hashTypeHasVolatileElements(robj *o);
 size_t hashTypeNumVolatileElements(robj *o);
 
 /* Pub / Sub */
@@ -3643,6 +3645,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
+void activeExpireCycleFields(void);
 void expireReplicaKeys(void);
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(void);

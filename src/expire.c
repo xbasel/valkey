@@ -161,6 +161,43 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
+void activeExpireCycleFields(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        serverDb *db = server.db[i];
+        if (db == NULL) continue;
+        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys_with_volatile_items, HASHTABLE_ITER_SAFE);
+        void *next;
+        while (kvstoreIteratorNext(kvs_it, &next)) {
+            robj *o = (robj *) next;
+            serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+            sds key = objectGetKey(o);
+
+            hashTypeIterator hi; // check hashTypeHasVolatileElements(o)
+            hashTypeResetIterator(&hi);
+            hashTypeInitVolatileIterator(o, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                vsetBucket *vset_bucket = (vsetBucket *) hi.next;
+                switch (vset_bucket->type) {
+                    case VSET_BUCKET_SINGLE: {
+                        entry *entry = vset_bucket->data.single;
+                        long long expiry = entryGetExpiry(entry);
+                        serverAssert(expiry!=EXPIRY_NONE);
+                        if (checkAlreadyExpired(expiry)) {
+                            // field expired
+                            volatileSetExpireEntry(hashTypeGetVolatileSet(o), entry);
+                            serverLog(LL_WARNING, "key %s field %s value %s expired", key, entryGetField(entry),
+                                      entryGetValue(entry));
+                        }
+                    }
+                }
+            }
+            hashTypeResetIterator(&hi);
+        }
+
+        kvstoreIteratorRelease(kvs_it);
+    }
+}
+
 void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
