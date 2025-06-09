@@ -3295,9 +3295,6 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
-void setAccessContext(robj *key, robj *val, serverDb *db);
-void setAccessContextWithFlags(robj *key, robj *val, serverDb *db, int flags);
-void resetAccessContext(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
