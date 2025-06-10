@@ -181,7 +181,7 @@ void hashTypeFreeVolatileSet(robj *o) {
 }
 
 int hashTypeHasVolatileElements(robj *o) {
-    return o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeGetVolatileSet(o);
+    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
 }
 
 size_t hashTypeNumVolatileElements(robj *o) {
@@ -191,6 +191,16 @@ size_t hashTypeNumVolatileElements(robj *o) {
     return 0;
 }
 
+void hashTypeIgnoreTTL(robj *o, int ignore) {
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        /* prevent placing access function if not needed */
+        if (!ignore && !hashTypeHasVolatileElements(o)) {
+            ignore = 0;
+        }
+        hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+    }
+}
+
 static volatile_set *
 hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
@@ -198,7 +208,7 @@ hashTypeGetOrcreateVolatileSet(robj *o) {
     if (*volatile_set_ref == NULL) {
         *volatile_set_ref = createVolatileSet(&hashvolatileEntryType);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
-        hashtableSetType(o->ptr, &hashWithVolatileItemsHashtableType);
+        hashTypeIgnoreTTL(o, 0);
     }
     return *volatile_set_ref;
 }
@@ -208,7 +218,7 @@ static void hashTypeDeleteVolatileSet(robj *o) {
     freeVolatileSet(*volatile_set_ref);
     *volatile_set_ref = NULL;
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
-    hashtableSetType(o->ptr, &hashHashtableType);
+    hashTypeIgnoreTTL(o, 1);
 }
 
 void hashTypeTrackEntry(robj *o, void *entry) {
