@@ -223,14 +223,14 @@ static void hashTypeDeleteVolatileSet(robj *o) {
 
 void hashTypeTrackEntry(robj *o, void *entry) {
     volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(volatileSetAddEntry(set, entry, hashTypeEntryGetExpiry(entry)));
+    serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
-    if (!hashTypeEntryHasExpire(entry)) return;
+    if (!entryHasExpiry(entry)) return;
     volatile_set *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(volatileSetRemoveEntry(set, entry, hashTypeEntryGetExpiry(entry)));
+    serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
     if (volatileSetNumEntries(set) == 0) {
         hashTypeDeleteVolatileSet(o);
     }
@@ -271,7 +271,7 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     if (!canExpireWithFlags(0, NULL)) return ELEMENT_VALID;
 
-    if (!hashTypeEntryIsExpired(entry)) return ELEMENT_VALID;
+    if (!entryIsExpired(entry)) return ELEMENT_VALID;
 
     return ELEMENT_INVALID;
 }
