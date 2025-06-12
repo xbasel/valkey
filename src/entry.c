@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include "sds.h"
 #include "server.h"
 #include "serverassert.h"
 #include "entry.h"
