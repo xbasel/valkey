@@ -321,7 +321,7 @@ test {HINCRBY - on expired field} {
     }
 
     # Field should still be present in memory due to lazy expiry
-    assert_equal 1 [r HLEN myhash]
+    assert_equal 1 [r ç]
 
     # Overwrite with HINCRBY (no TTL) before accessing
     r HINCRBY myhash field1 1
