@@ -9,7 +9,7 @@
 #include "server.h"
 
 #define EXPIRY_HASH_SIZE 16
-#define VSET_BUCKET_KEY_LEN 64
+#define VSET_BUCKET_KEY_LEN 8
 
 volatile_set *createVolatileSet(volatileEntryType *type) {
     volatile_set *set = zmalloc(sizeof(volatile_set));

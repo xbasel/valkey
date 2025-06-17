@@ -36,8 +36,8 @@ typedef struct {
     int type;
     union {
         void *single;
-        void *listpack; // or actual `listpack *` if you have that type
-        hashtable *hashtable; // dict from pointer address or entry key
+        void *listpack;
+        hashtable *hashtable;
     } data;
 } vsetBucket;
 
