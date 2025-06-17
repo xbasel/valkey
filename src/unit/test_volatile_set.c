@@ -441,3 +441,78 @@ static void crash_duplicate_in_hashtable(void) {
 //
 //     return 0;
 // }
+
+int test_bucket_order_by_expiry(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+
+    volatile_set *vset = createVolatileSet(NULL);
+
+    long long expiries[] = {180000, 60000, 120000}; // intentionally unordered
+    long long expected[] = {60000, 120000, 180000};
+
+    for (int i = 0; i < 3; i++) {
+        char f[16], v[16];
+        snprintf(f, sizeof(f), "f%lld", expiries[i]);
+        snprintf(v, sizeof(v), "v%lld", expiries[i]);
+        entry *e = entryCreate(createSds(f), createSds(v), expiries[i]);
+        TEST_ASSERT(volatileSetAddEntry(vset, e, expiries[i]) == 1);
+    }
+
+    raxIterator ri;
+    raxStart(&ri, vset->expiry_buckets);
+    raxSeek(&ri, ">=", NULL, 0);
+
+    int i = 0;
+    while (raxNext(&ri)) {
+        long long ts;
+        memcpy(&ts, ri.key, sizeof(ts));
+        ts = ntohu64(ts); // convert back from BE
+        TEST_ASSERT(ts == expected[i]);
+        i++;
+    }
+    TEST_ASSERT(i == 3); // Ensure we saw all buckets
+
+    raxStop(&ri);
+    freeVolatileSet(vset);
+    return 0;
+}
+
+int test_bucket_lookup_strictly_below(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+
+    volatile_set *vset = createVolatileSet(NULL);
+    long long buckets[] = {60000, 120000, 180000};
+    entry *e[3];
+
+    for (int i = 0; i < 3; i++) {
+        char f[16], v[16];
+        snprintf(f, sizeof(f), "f%lld", buckets[i]);
+        snprintf(v, sizeof(v), "v%lld", buckets[i]);
+        e[i] = entryCreate(createSds(f), createSds(v), buckets[i]);
+        TEST_ASSERT(volatileSetAddEntry(vset, e[i], buckets[i]) == 1);
+    }
+
+    // Try to find the bucket just below or equal to 119000 → should get 60000
+    long long lookup_ts = 119000;
+    unsigned char lookup_key[VSET_BUCKET_KEY_LEN] = {0};
+    encodeExpiryBucketKey(lookup_key, lookup_ts);
+
+    raxIterator ri;
+    raxStart(&ri, vset->expiry_buckets);
+    raxSeek(&ri, ">=", lookup_key, sizeof(long long));
+
+    if (!raxPrev(&ri)) {
+        TEST_ASSERT(!"Expected to find bucket below");
+    } else {
+        long long ts;
+        memcpy(&ts, ri.key, sizeof(ts));
+        ts = ntohu64(ts);
+
+        TEST_ASSERT(ts == 60000);
+        // TEST_ASSERT(ri.data == e[0]); // matches entry at 60000
+    }
+
+    raxStop(&ri);
+    freeVolatileSet(vset);
+    return 0;
+}
