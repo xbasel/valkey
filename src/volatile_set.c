@@ -18,33 +18,26 @@ volatile_set *createVolatileSet(volatileEntryType *type) {
     return set;
 }
 
+void freeRaxBuckets(void* p) {
+    vsetBucket *bucket = p;
+    switch (bucket->type) {
+        case VSET_BUCKET_SINGLE:
+            // No internal memory to free
+            break;
+        case VSET_BUCKET_LISTPACK:
+            lpFree(bucket->data.listpack);
+            break;
+        case VSET_BUCKET_HT:
+            hashtableRelease(bucket->data.hashtable);
+            break;
+        default:
+            serverPanic("Unknown volatile set type in freeVolatileSet");
+    }
+    zfree(bucket);
+}
 void freeVolatileSet(volatile_set *b) {
     if (!b) return;
-
-    raxIterator ri;
-    raxStart(&ri, b->expiry_buckets);
-    raxSeek(&ri, "^", NULL, 0); // Start from smallest
-
-    while (raxNext(&ri)) {
-        vsetBucket *bucket = ri.data;
-        switch (bucket->type) {
-            case VSET_BUCKET_SINGLE:
-                // No internal memory to free
-                break;
-            case VSET_BUCKET_LISTPACK:
-                lpFree(bucket->data.listpack);
-                break;
-            case VSET_BUCKET_HT:
-                hashtableRelease(bucket->data.hashtable);
-                break;
-            default:
-                serverPanic("Unknown volatile set type in freeVolatileSet");
-        }
-        zfree(bucket);
-    }
-
-    raxStop(&ri);
-    raxFree(b->expiry_buckets);
+    raxFreeWithCallback(b->expiry_buckets, freeRaxBuckets);
     zfree(b);
 }
 

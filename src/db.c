@@ -487,6 +487,11 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
+        /* If deleting a hash object, remove 
+        if (val->type==OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
+            kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr);
+        }
+
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {
