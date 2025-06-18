@@ -112,6 +112,23 @@ int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
     return 0;
 }
 
+unsigned char *lpDeleteInteger(unsigned char *lp, long long target, int *deleted) {
+    *deleted = 0;
+    unsigned char *p = lpFirst(lp);
+    while (p) {
+        int64_t val;
+        unsigned int slen;
+
+        lpGetValue(p, &slen, &val);
+        if (val == target) {
+            lp = lpDelete(lp, p, NULL);
+            *deleted = 1;
+            break;
+        }
+        p = lpNext(lp, p);
+    }
+    return lp;
+}
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
 
@@ -133,15 +150,15 @@ int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
 
         case VSET_BUCKET_LISTPACK: {
             void *lp = bucket->data.listpack;
-            if (lpFind(lp, NULL, (unsigned char *)&entry, sizeof(entry), 0)) {
-                if (!lpDelete(lp,entry,NULL)) return 0;
-            }
+            uintptr_t pval = (uintptr_t) entry;
+            int out;
+            lp = lpDeleteInteger(lp, pval, &out);
 
             if (lpLength(lp) == 1) {
                 // Downgrade back to SINGLE
                 unsigned int slen;
                 long long val;
-                lpGetValue(lp, &slen, &val);
+                lpGetValue(lpFirst(lp), &slen, &val);
                 bucket->type = VSET_BUCKET_SINGLE;
                 bucket->data.single = (void *)(uintptr_t)val;
                 lpFree(lp);
@@ -214,4 +231,24 @@ int volatileSetNext(volatileSetIterator *it, void **entryptr) {
 }
 void volatileSetReset(volatileSetIterator *it) {
     raxStop(&it->bucket);
+}
+
+vsetBucket *volatileSetGetOldestBucketBelow(volatile_set *vs, uint64_t now) {
+    if (!vs || !vs->expiry_buckets || vs->expiry_buckets->numele == 0) return NULL;
+
+    unsigned char key[VSET_BUCKET_KEY_LEN];
+    encodeExpiryBucketKey(&key, now);
+
+    raxIterator iter;
+    raxStart(&iter, vs->expiry_buckets);
+
+    vsetBucket *result = NULL;
+
+    // Find the last key <= now
+    if (raxSeek(&iter, "<=", key, VSET_BUCKET_KEY_LEN)) {
+        result = iter.data;
+    }
+
+    raxStop(&iter);
+    return result;
 }

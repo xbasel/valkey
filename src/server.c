@@ -1296,7 +1296,7 @@ void databasesCron(void) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-            activeExpireCycleFields();
+            activeExpireCycleFieldsTimed(&server.active_expire_field_iterator, 20000);
         }
     }
 
@@ -2838,6 +2838,17 @@ serverDb *createDatabaseIfNeeded(int id) {
     return server.db[id];
 }
 
+void activeExpireFieldIteratorInit(ActiveExpireFieldIterator *it) {
+    memset(it, 0, sizeof(*it));
+}
+
+void activeExpireFieldIteratorCleanup(ActiveExpireFieldIterator *it) {
+    if (it->kvs_it) kvstoreIteratorRelease(it->kvs_it);
+    it->kvs_it = NULL;
+    it->vset_it_initialized = 0;
+    it->current_key = NULL;
+}
+
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -3049,6 +3060,8 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    activeExpireFieldIteratorInit(&server.active_expire_field_iterator);
 }
 
 void initListeners(void) {

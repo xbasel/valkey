@@ -1614,6 +1614,18 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
+
+
+typedef struct ActiveExpireFieldIterator {
+    int next_db;
+    serverDb *db;
+    kvstoreIterator *kvs_it;
+    volatileSetIterator vset_it;
+    robj *current_key;
+    int vset_it_initialized;
+} ActiveExpireFieldIterator;
+
+
 struct valkeyServer {
     /* General */
     pid_t pid;                /* Main process pid. */
@@ -2213,6 +2225,9 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+
+    /* has field expiry */
+    ActiveExpireFieldIterator active_expire_field_iterator;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3645,7 +3660,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
-void activeExpireCycleFields(void);
+void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_limit_us);
 void expireReplicaKeys(void);
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(void);

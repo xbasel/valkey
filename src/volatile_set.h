@@ -49,6 +49,7 @@ size_t volatileSetNumEntries(volatile_set *set);
 void volatileSetStart(volatile_set *set, volatileSetIterator *it);
 int volatileSetNext(volatileSetIterator *it, void **entryptr);
 void volatileSetReset(volatileSetIterator *it);
+vsetBucket *volatileSetGetOldestBucketBelow(volatile_set *vs, uint64_t now);
 size_t encodeExpiryBucketKey(unsigned char *key, long long expiry);
 
 void freeVolatileSet(volatile_set *b);
