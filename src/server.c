@@ -679,12 +679,6 @@ size_t hashHashtableTypeMetadataSize(void) {
 
 extern hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry);
 
-size_t hashHashtableTypeMetadataSize(void) {
-    return sizeof(void *);
-}
-
-extern hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry);
-
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
@@ -700,15 +694,6 @@ hashtableType hashWithVolatileItemsHashtableType = {
     .entryDestructor = hashHashtableTypeDestructor,
     .getMetadataSize = hashHashtableTypeMetadataSize,
     .validateEntry = hashHashtableTypeValidate,
-};
-
-hashtableType hashWithVolatileItemsHashtableType = {
-    .hashFunction = dictSdsHash,
-    .entryGetKey = hashHashtableTypeGetKey,
-    .keyCompare = hashtableSdsKeyCompare,
-    .entryDestructor = hashHashtableTypeDestructor,
-    .getMetadataSize = hashHashtableTypeMetadataSize,
-    .accessElement = hashHashtableTypeAccess,
 };
 
 /* Hashtable type without destructor */

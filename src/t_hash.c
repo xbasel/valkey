@@ -36,13 +36,11 @@
 #include "rax.h"
 #include "sds.h"
 #include "volatile_set.h"
-// #include "server.h"
+#include "server.h"
 #include "zmalloc.h"
 #include <math.h>
 #include <string.h>
 #include "entry.h"
-
-#include "server.h"
 
 
 volatileEntryType hashVolatileEntryType = {
@@ -107,123 +105,6 @@ static void hashTypeDeleteVolatileSet(robj *o) {
     hashTypeIgnoreTTL(o, true);
 }
 
-void hashTypeTrackEntry(robj *o, void *entry) {
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
-}
-
-void hashTypeUntrackEntry(robj *o, void *entry) {
-    if (!entryHasExpiry(entry)) return;
-    volatile_set *set = hashTypeGetVolatileSet(o);
-    debugServerAssert(set);
-    serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
-    if (volatileSetNumEntries(set) == 0) {
-        hashTypeDeleteVolatileSet(o);
-    }
-}
-
-static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
-    int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
-    int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
-    /* If entry was not tracked before and not going to be tracked now, we can simply return */
-    if (!old_tracked && !new_tracked)
-        return;
-
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
-    debugServerAssert(set);
-    if (entryHasValuePtr(entry)) {
-        /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
-         * header could be too small for holding the real allocation size. */
-        mem += zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
-    } else {
-        mem += sdsReqSize(sdslen(entry), sdsType(entry));
-        if (entryHasExpiry(entry)) mem += sizeof(long long);
-    }
-    mem += sdsAllocSize(hashTypeEntryGetValue(entry));
-    return mem;
-}
-
-    if (old_tracked && !new_tracked)
-        serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
-    else if (new_tracked && !old_tracked)
-        serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
-    else {
-        volatile_set *set = hashTypeGetVolatileSet(o);
-        debugServerAssert(set);
-        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
-    }
-    if (volatileSetNumEntries(set) == 0) {
-        hashTypeDeleteVolatileSet(o);
-    }
-}
-
-hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {
-    UNUSED(ht);
-    expirationPolicy policy = getExpirationPolicyWithFlags(0);
-    if (policy == POLICY_IGNORE_EXPIRE) return ENTRY_VALID;
-
-    if (!entryIsExpired(entry)) return ENTRY_VALID;
-
-    return ENTRY_INVALID;
-}
-
-/*-----------------------------------------------------------------------------
- * Hash type Expiry API
- *----------------------------------------------------------------------------*/
-
-static volatile_set *hashTypeGetVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    return *(volatile_set **)hashtableMetadata(o->ptr);
-}
-
-void hashTypeFreeVolatileSet(robj *o) {
-    volatile_set *set = hashTypeGetVolatileSet(o);
-    if (set)
-        freeVolatileSet(set);
-}
-
-int hashTypeHasVolatileElements(robj *o) {
-    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
-}
-
-size_t hashTypeNumVolatileElements(robj *o) {
-    if (hashTypeHasVolatileElements(o)) {
-        return volatileSetNumEntries(hashTypeGetVolatileSet(o));
-    }
-    return 0;
-}
-
-void hashTypeIgnoreTTL(robj *o, int ignore) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        /* prevent placing access function if not needed */
-        if (!ignore && !hashTypeHasVolatileElements(o)) {
-            ignore = 0;
-        }
-        hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
-    }
-}
-
-static volatile_set *
-hashTypeGetOrcreateVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    if (*volatile_set_ref == NULL) {
-        *volatile_set_ref = createVolatileSet(&hashvolatileEntryType);
-        /* serves mainly for optimization. Use type which supports access function only when needed. */
-        hashTypeIgnoreTTL(o, 0);
-    }
-    return *volatile_set_ref;
-}
-
-
-static void hashTypeDeleteVolatileSet(robj *o) {
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    freeVolatileSet(*volatile_set_ref);
-    *volatile_set_ref = NULL;
-    /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
-    hashTypeIgnoreTTL(o, 1);
-}
-
 void hashTypeTrackEntry(serverDb* db, robj *o, void *entry) {
     volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
     serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
@@ -238,7 +119,7 @@ void hashTypeUntrackEntry(serverDb* db, robj *o, void *entry) {
     if (volatileSetNumEntries(set) == 0) {
         hashTypeDeleteVolatileSet(o);
     }
-    // kvstoreHashtableDelete(db->keys_with_volatile_items, 0, o);
+    // kvstoreHashtableDelete(db->keys_with_volatile_items, 0, o); // TODO
 }
 
 static void hashTypeTrackUpdateEntry(serverDb* db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
@@ -266,20 +147,14 @@ static void hashTypeTrackUpdateEntry(serverDb* db, robj *o, void *old_entry, voi
     }
 }
 
-int hashTypeExpireEntry(void *entry) {
-    // TBD
-    UNUSED(entry);
-    return 1;
-}
-
-hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) {
+hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {
     UNUSED(ht);
+    expirationPolicy policy = getExpirationPolicyWithFlags(0);
+    if (policy == POLICY_IGNORE_EXPIRE) return ENTRY_VALID;
 
-    if (!canExpireWithFlags(0, NULL)) return ELEMENT_VALID;
+    if (!entryIsExpired(entry)) return ENTRY_VALID;
 
-    if (!entryIsExpired(entry)) return ELEMENT_VALID;
-
-    return ELEMENT_INVALID;
+    return ENTRY_INVALID;
 }
 
 /*-----------------------------------------------------------------------------
@@ -706,20 +581,6 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtableInitIterator(&hi->iter, subject->ptr, 0);
-    } else {
-        serverPanic("Unknown hash encoding");
-    }
-}
-
-void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
-    hi->subject = subject;
-    hi->encoding = subject->encoding;
-    hi->volatile_items = 1;
-
-    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        return;
-    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        volatileSetStart(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -1292,8 +1153,6 @@ void hsetexCommand(client *c) {
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
-        }
-        when += commandTimeSnapshot();
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
@@ -1738,9 +1597,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
 
-    hashTypeSetAccessContext(hash, c->db);
-
-    if (checkType(c, hash, OBJ_HASH)) return;
+    robj *hash = lookupKeyRead(c->db, c->argv[1]);
 
     if (checkType(c, hash, OBJ_HASH)) return;
 

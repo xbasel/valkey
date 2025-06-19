@@ -1967,6 +1967,13 @@ static int objectIsExpired(robj *val) {
 static int keyIsExpiredWithDictIndexImpl(serverDb *db, robj *key, int dict_index) {
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
+    mstime_t when = getExpireWithDictIndex(db, key, dict_index);
+    return timestampIsExpired(when);
+}
+
+/* Check if the key is expired. */
+static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
+    if (!keyIsExpiredWithDictIndexImpl(db, key, dict_index)) return 0;
 
     /* See expireIfNeededWithDictIndex for more details. */
     if (server.primary_host == NULL && server.import_mode) {

@@ -886,11 +886,6 @@ static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_ind
     }
 }
 
-static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem) {
-    if (ht->type->accessElement == NULL) return ELEMENT_VALID;
-    return ht->type->accessElement(ht, elem);
-}
-
 /* Find an empty position in the table for inserting an entry with the given hash. */
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index) {
     int table = hashtableIsRehashing(ht) ? 1 : 0;
@@ -2043,9 +2038,6 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
             /* No entry here. */
-            continue;
-        }
-        if (!(iter->flags & HASHTABLE_ITER_AVOID_ACCESS) && accessElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ELEMENT_VALID) {
             continue;
         }
         if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ENTRY_VALID) {
