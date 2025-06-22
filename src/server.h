@@ -859,7 +859,6 @@ typedef struct replBufBlock {
 typedef struct serverDb {
     kvstore *keys;    /* The keyspace for this DB */
     kvstore *expires; /* Timeout of keys with a timeout set */
-    kvstore *object_with_volatile_elements;
     kvstore *keys_with_volatile_items;    /* Keys with volatile items */
     dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
     dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for

@@ -6324,13 +6324,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
-            long long keys, vkeys;
+            long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
             vkeys = kvstoreSize(db->expires);
+            keysvitems = kvstoreSize(db->keys_with_volatile_items);
+
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl);
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,subexpiry=%lld\r\n", j, keys, vkeys,
+                                    db->avg_ttl, keysvitems);
             }
         }
     }

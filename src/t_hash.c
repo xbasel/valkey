@@ -121,7 +121,6 @@ void hashTypeUntrackEntry(serverDb* db, robj *o, void *entry) {
     if (volatileSetNumEntries(set) == 0) {
         hashTypeDeleteVolatileSet(o);
     }
-    // kvstoreHashtableDelete(db->keys_with_volatile_items, 0, o); // TODO
 }
 
 static void hashTypeTrackUpdateEntry(serverDb* db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
