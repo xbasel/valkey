@@ -43,6 +43,8 @@
 #include "entry.h"
 
 
+int hashTypeExpireEntry(void*db, void* o, void *entry);
+
 volatileEntryType hashVolatileEntryType = {
     .entryGetKey = (sds(*)(const void *entry))entryGetField,
     .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
@@ -145,6 +147,26 @@ static void hashTypeTrackUpdateEntry(serverDb* db, robj *o, void *old_entry, voi
         hashTypeDeleteVolatileSet(o);
         kvstoreHashtableDelete(db->keys_with_volatile_items, 0, o);
     }
+}
+
+int expireField(serverDb* db, robj* o, void* entry) {
+    hashTypeIgnoreTTL(o, 1);
+    if (hashTypeDelete(db, o, entry)) {
+        if (hashTypeLength(o) == 0) {
+            sds key = objectGetKey(o);
+            robj *keyobj = createStringObject(key, sdslen(key));
+            dbDelete(db, keyobj);
+            freeStringObject(keyobj);
+            return 1;
+        }
+    }
+    hashTypeIgnoreTTL(o, 0); // TODO xbasel, we need to reset the original ignore value
+    return 0;
+}
+
+int hashTypeExpireEntry(void*db, void* o, void *entry) {
+    // TBD
+    return expireField(db, o, entry);
 }
 
 hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {

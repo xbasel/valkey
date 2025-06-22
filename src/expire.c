@@ -161,22 +161,23 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-int expireField(serverDb* db, robj* o, void* entry) {
-    hashTypeIgnoreTTL(o, 1);
-    server.lazy_expire_disabled = 1; // TODO remove
-    // hashTypeUntrackEntry(db, o, entry);
-    if (hashTypeDelete(db, o, entry)) {
-        if (hashTypeLength(o) == 0) {
-            sds key = objectGetKey(o);
-            robj *keyobj = createStringObject(key, sdslen(key));
-            dbDelete(db, keyobj);
-            freeStringObject(keyobj);
-            return 1;
-        }
-    }
-    hashTypeIgnoreTTL(o, 0); // TODO xbasel, we need to reset the original ignore value
-    return 0;
-}
+// TODO xbasel remove
+// int expireField(serverDb* db, robj* o, void* entry) {
+//     hashTypeIgnoreTTL(o, 1);
+//     server.lazy_expire_disabled = 1; // TODO remove
+//     // hashTypeUntrackEntry(db, o, entry);
+//     if (hashTypeDelete(db, o, entry)) {
+//         if (hashTypeLength(o) == 0) {
+//             sds key = objectGetKey(o);
+//             robj *keyobj = createStringObject(key, sdslen(key));
+//             dbDelete(db, keyobj);
+//             freeStringObject(keyobj);
+//             return 1;
+//         }
+//     }
+//     hashTypeIgnoreTTL(o, 0); // TODO xbasel, we need to reset the original ignore value
+//     return 0;
+// }
 
 void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_limit_us) {
     uint64_t start = ustime();
@@ -222,7 +223,8 @@ void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_l
                         serverLog(LL_WARNING, "key %s field %s value %s expired",
                                   key, entryGetField(entry), entryGetValue(entry));
                         // volatileSetExpireEntry(vset, entry);
-                        if (expireField(it->db, it->current_key, entry)) {
+
+                        if (vset->etypr->expire(it->db, it->current_key, entry)) {
                             it->current_key = NULL;
                             return;
                         }

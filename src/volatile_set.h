@@ -14,7 +14,7 @@ typedef struct {
 
     long long (*getExpiry)(const void *entry);
 
-    int (*expire)(void *entry);
+    int (*expire)(void*db, void* o, void *entry);
 
 } volatileEntryType;
 
@@ -46,7 +46,7 @@ typedef struct volatileSetIterator {
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
 int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
-int volatileSetExpireEntry(volatile_set *set, void *entry);
+int volatileSetExpireEntry(volatile_set *set, void*serverDb, void*o, void *entry);
 int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 size_t volatileSetNumEntries(volatile_set *set);
 void volatileSetStart(volatile_set *set, volatileSetIterator *it);

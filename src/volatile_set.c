@@ -201,10 +201,10 @@ int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry,
     return 1;
 }
 
-int volatileSetExpireEntry(volatile_set *set, void *entry) {
+int volatileSetExpireEntry(volatile_set *set, void*serverDb, void*o, void *entry) {
     volatileSetRemoveEntry(set, entry, set->etypr->getExpiry(entry));
     if (set->etypr->expire) {
-        set->etypr->expire(entry);
+        set->etypr->expire(serverDb,o,entry);
         return 1;
     }
     return 0;
