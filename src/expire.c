@@ -161,24 +161,6 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-// TODO xbasel remove
-// int expireField(serverDb* db, robj* o, void* entry) {
-//     hashTypeIgnoreTTL(o, 1);
-//     server.lazy_expire_disabled = 1; // TODO remove
-//     // hashTypeUntrackEntry(db, o, entry);
-//     if (hashTypeDelete(db, o, entry)) {
-//         if (hashTypeLength(o) == 0) {
-//             sds key = objectGetKey(o);
-//             robj *keyobj = createStringObject(key, sdslen(key));
-//             dbDelete(db, keyobj);
-//             freeStringObject(keyobj);
-//             return 1;
-//         }
-//     }
-//     hashTypeIgnoreTTL(o, 0); // TODO xbasel, we need to reset the original ignore value
-//     return 0;
-// }
-
 void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_limit_us) {
     uint64_t start = ustime();
 
@@ -281,110 +263,6 @@ void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_l
         it->current_key = NULL;
     }
 }
-
-
-//
-// void activeExpireFieldIteratorInit(ActiveExpireFieldIterator *it) {
-//     memset(it, 0, sizeof(*it));
-// }
-//
-// void activeExpireFieldIteratorCleanup(ActiveExpireFieldIterator *it) {
-//     if (it->kvs_it) kvstoreIteratorRelease(it->kvs_it);
-//     it->kvs_it = NULL;
-//     it->vset_it_initialized = 0;
-//     it->current_key = NULL;
-// }
-
-// void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_limit_us) {
-//     uint64_t start = ustime();
-//
-//     while (ustime() - start < time_limit_us) {
-//         if (!it->kvs_it) {
-//             if (it->current_db >= server.dbnum) {
-//                 it->current_db = 0;
-//                 return;
-//             }
-//
-//             serverDb *db = server.db[it->current_db++];
-//             if (!db) continue;
-//
-//             it->kvs_it = kvstoreIteratorInit(db->keys_with_volatile_items, HASHTABLE_ITER_SAFE);
-//             it->current_key = NULL;
-//         }
-//
-//         if (!it->current_key) {
-//             void *next;
-//             if (!kvstoreIteratorNext(it->kvs_it, &next)) {
-//                 kvstoreIteratorRelease(it->kvs_it);
-//                 it->kvs_it = NULL;
-//                 continue;
-//             }
-//
-//             it->current_key = (robj *)next;
-//             volatile_set *vset = hashTypeGetVolatileSet(it->current_key);
-//             volatileSetStart(vset, &it->vset_it);
-//             it->vset_it_initialized = 1;
-//         }
-//
-//         while (it->vset_it_initialized && ustime() - start < time_limit_us) {
-//             void *entry;
-//             if (!volatileSetNext(&it->vset_it, &entry)) {
-//                 volatileSetReset(&it->vset_it);
-//                 it->vset_it_initialized = 0;
-//                 it->current_key = NULL;
-//                 break;
-//             }
-//
-//             long long expiry = entryGetExpiry(entry);
-//             serverAssert(expiry != EXPIRY_NONE);
-//             sds key = objectGetKey(it->current_key);
-//             serverLog(LL_WARNING, "key %s field %s value %s expired", key, entryGetField(entry),
-//                       entryGetValue(entry));
-//             sdsfree(key);
-//             if ( checkAlreadyExpired(expiry)) {
-//                 volatileSetExpireEntry(hashTypeGetVolatileSet(it->current_key), entry);
-//             }
-//         }
-//     }
-// }
-
-
-// void activeExpireCycleFields(void) {
-//     for (int i = 0; i < server.dbnum; i++) {
-//         serverDb *db = server.db[i];
-//         if (db == NULL) continue;
-//         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys_with_volatile_items, HASHTABLE_ITER_SAFE);
-//         void *next;
-//         while (kvstoreIteratorNext(kvs_it, &next)) {
-//             robj *o = (robj *) next;
-//             serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-//             sds key = objectGetKey(o);
-//
-//             hashTypeIterator hi; // check hashTypeHasVolatileElements(o)
-//             hashTypeResetIterator(&hi);
-//             hashTypeInitVolatileIterator(o, &hi);
-//             while (hashTypeNext(&hi) != C_ERR) {
-//                 vsetBucket *vset_bucket = (vsetBucket *) hi.next;
-//                 switch (vset_bucket->type) {
-//                     case VSET_BUCKET_SINGLE: {
-//                         entry *entry = vset_bucket->data.single;
-//                         long long expiry = entryGetExpiry(entry);
-//                         serverAssert(expiry!=EXPIRY_NONE);
-//                         if (checkAlreadyExpired(expiry)) {
-//                             // field expired
-//                             volatileSetExpireEntry(hashTypeGetVolatileSet(o), entry);
-//                             serverLog(LL_WARNING, "key %s field %s value %s expired", key, entryGetField(entry),
-//                                       entryGetValue(entry));
-//                         }
-//                     }
-//                 }
-//             }
-//             hashTypeResetIterator(&hi);
-//         }
-//
-//         kvstoreIteratorRelease(kvs_it);
-//     }
-// }
 
 void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire
