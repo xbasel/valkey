@@ -516,3 +516,174 @@ int test_bucket_lookup_strictly_below(int argc, char **argv, int flags) {
     freeVolatileSet(vset);
     return 0;
 }
+
+
+int test_iterator_basic(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+
+    volatile_set *vset = createVolatileSet(NULL);
+    long long expiry = 10000000;
+
+    entry *entries[130];
+    for (int i = 0; i < 130; i++) {
+        char f[32], v[32];
+        snprintf(f, sizeof(f), "f%d", i);
+        snprintf(v, sizeof(v), "v%d", i);
+        entries[i] = entryCreate(createSds(f), createSds(v), expiry);
+        TEST_ASSERT(volatileSetAddEntry(vset, entries[i], expiry) == 1);
+    }
+
+    int seen[130] = {0};
+    volatileSetIterator it;
+    volatileSetStart(vset, &it);
+    void *ptr;
+
+    int count = 0;
+    while (volatileSetNext(&it, &ptr)) {
+        for (int i = 0; i < 130; i++) {
+            if (entries[i] == ptr) {
+                TEST_ASSERT(seen[i] == 0); // no duplicates
+                seen[i] = 1;
+                count++;
+                break;
+            }
+        }
+    }
+    volatileSetReset(&it);
+
+    TEST_ASSERT(count == 130);
+    for (int i = 0; i < 130; i++)
+        TEST_ASSERT(seen[i] == 1);
+
+    freeVolatileSet(vset);
+    return 0;
+}
+
+int test_iterator_listpack(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+
+    volatile_set *vset = createVolatileSet(NULL);
+    long long expiry = 12345678;
+
+    entry *entries[50];
+    for (int i = 0; i < 50; i++) {
+        char f[32], v[32];
+        snprintf(f, sizeof(f), "f%d", i);
+        snprintf(v, sizeof(v), "v%d", i);
+        entries[i] = entryCreate(createSds(f), createSds(v), expiry);
+        TEST_ASSERT(volatileSetAddEntry(vset, entries[i], expiry) == 1);
+    }
+
+    // Check the bucket type is LISTPACK
+    unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
+    size_t key_len = encodeExpiryBucketKey(key, expiry);
+    void *raw = NULL;
+    TEST_ASSERT(raxFind(vset->expiry_buckets, key, key_len, &raw) == 1);
+    vsetBucket *bucket = raw;
+    TEST_ASSERT(bucket->type == VSET_BUCKET_LISTPACK);
+    TEST_ASSERT(lpLength(bucket->data.listpack) == 50);
+
+    // Iterate
+    int seen[50] = {0};
+    volatileSetIterator it;
+    volatileSetStart(vset, &it);
+    void *ptr;
+    int count = 0;
+
+    while (volatileSetNext(&it, &ptr)) {
+        for (int i = 0; i < 50; i++) {
+            if (entries[i] == ptr) {
+                TEST_ASSERT(seen[i] == 0);
+                seen[i] = 1;
+                count++;
+                break;
+            }
+        }
+    }
+
+    volatileSetReset(&it);
+
+    TEST_ASSERT(count == 50);
+    for (int i = 0; i < 50; i++)
+        TEST_ASSERT(seen[i] == 1);
+
+    freeVolatileSet(vset);
+    return 0;
+}
+
+int test_iterator_mixed_buckets(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+
+    volatile_set *vset = createVolatileSet(NULL);
+    long long expiry1 = 10000000;              // SINGLE
+    long long expiry2 = expiry1 + 60000;        // LISTPACK
+    long long expiry3 = expiry2 + 60000;        // HT
+
+    entry *e_single = entryCreate(createSds("s"), createSds("v"), expiry1);
+    TEST_ASSERT(volatileSetAddEntry(vset, e_single, expiry1) == 1);
+
+    entry *e_listpack[50];
+    for (int i = 0; i < 50; i++) {
+        char f[32], v[32];
+        snprintf(f, sizeof(f), "lp_f%d", i);
+        snprintf(v, sizeof(v), "lp_v%d", i);
+        e_listpack[i] = entryCreate(createSds(f), createSds(v), expiry2);
+        TEST_ASSERT(volatileSetAddEntry(vset, e_listpack[i], expiry2) == 1);
+    }
+
+    entry *e_ht[130];
+    for (int i = 0; i < 130; i++) {
+        char f[32], v[32];
+        snprintf(f, sizeof(f), "ht_f%d", i);
+        snprintf(v, sizeof(v), "ht_v%d", i);
+        e_ht[i] = entryCreate(createSds(f), createSds(v), expiry3);
+        TEST_ASSERT(volatileSetAddEntry(vset, e_ht[i], expiry3) == 1);
+    }
+
+    int found_single = 0;
+    int seen_listpack[50] = {0};
+    int seen_ht[130] = {0};
+
+    volatileSetIterator it;
+    volatileSetStart(vset, &it);
+    void *ptr;
+    int count = 0;
+
+    int stop  = 0;
+    while (stop);
+
+    while (volatileSetNext(&it, &ptr)) {
+        if (ptr == e_single) {
+            TEST_ASSERT(found_single == 0);
+            found_single = 1;
+            goto seen;
+        }
+        for (int i = 0; i < 50; i++) {
+            if (ptr == e_listpack[i]) {
+                TEST_ASSERT(seen_listpack[i] == 0);
+                seen_listpack[i] = 1;
+                goto seen;
+            }
+        }
+        for (int i = 0; i < 130; i++) {
+            if (ptr == e_ht[i]) {
+                TEST_ASSERT(seen_ht[i] == 0);
+                seen_ht[i] = 1;
+                goto seen;
+            }
+        }
+        TEST_ASSERT(!"Unknown entry found");
+
+    seen:
+        count++;
+    }
+    volatileSetReset(&it);
+
+    TEST_ASSERT(count == 1 + 50 + 130);
+    TEST_ASSERT(found_single == 1);
+    for (int i = 0; i < 50; i++) TEST_ASSERT(seen_listpack[i] == 1);
+    for (int i = 0; i < 130; i++) TEST_ASSERT(seen_ht[i] == 1);
+
+    freeVolatileSet(vset);
+    return 0;
+}

@@ -218,17 +218,66 @@ size_t volatileSetNumEntries(volatile_set *set) {
 void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
     raxStart(&it->bucket, set->expiry_buckets);
     raxSeek(&it->bucket, ">=", NULL, 0);
+    it->inner_it = NULL;
+    it->state = 0;
 }
 
 int volatileSetNext(volatileSetIterator *it, void **entryptr) {
-    if (raxNext(&it->bucket)) {
-        // assert(it->bucket.key_len != EXPIRY_HASH_SIZE);
-        // memcpy(it->bucket.key + 8, entryptr, sizeof(*entryptr));
-        *entryptr = it->bucket.data;
-        return 1;
+    while (1) {
+        switch (it->state) {
+            case 0: // Init or move to next bucket
+                if (!raxNext(&it->bucket)) return 0;
+                it->current_bucket = it->bucket.data;
+                if (!it->current_bucket) continue;
+
+                if (it->current_bucket->type == VSET_BUCKET_SINGLE) {
+                    *entryptr = it->current_bucket->data.single;
+                    it->state = 1;
+                    return 1;
+                } else if (it->current_bucket->type == VSET_BUCKET_LISTPACK) {
+                    it->inner_it = NULL;
+                    it->state = 2;
+                    continue;
+                } else if (it->current_bucket->type == VSET_BUCKET_HT) {
+                    it->inner_it = hashtableCreateIterator(it->current_bucket->data.hashtable, HASHTABLE_ITER_SAFE);
+                    it->state = 3;
+                    continue;
+                }
+                break;
+
+            case 1: // single already returned, move to next bucket
+                it->state = 0;
+                continue;
+
+            case 2: { // listpack
+                it->inner_it = it->inner_it
+                                   ? lpNext(it->current_bucket->data.listpack, it->inner_it)
+                                   : lpFirst(it->current_bucket->data.listpack);
+
+                if (!it->inner_it) {
+                    it->state = 0;
+                    continue;
+                }
+                unsigned int slen;
+                long long val;
+                lpGetValue(it->inner_it, &slen, &val);
+                *entryptr = (void *)(uintptr_t)val;
+                return 1;
+            }
+
+            case 3: { // hashtable
+                if (!hashtableNext(it->inner_it, entryptr)) {
+                    hashtableReleaseIterator(it->inner_it);
+                    it->inner_it = NULL;
+                    it->state=0;
+                    continue;
+                }
+                return 1;
+            }
+        }
     }
-    return 0;
 }
+
 void volatileSetReset(volatileSetIterator *it) {
     raxStop(&it->bucket);
 }

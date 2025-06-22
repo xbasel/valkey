@@ -24,10 +24,6 @@ typedef struct {
     rax *expiry_buckets;
 } volatile_set;
 
-typedef struct volatileSetIterator {
-    raxIterator bucket;
-} volatileSetIterator;
-
 #define VSET_BUCKET_SINGLE 0
 #define VSET_BUCKET_LISTPACK 1
 #define VSET_BUCKET_HT 2
@@ -40,6 +36,13 @@ typedef struct {
         hashtable *hashtable;
     } data;
 } vsetBucket;
+
+typedef struct volatileSetIterator {
+    raxIterator bucket;
+    vsetBucket *current_bucket;
+    int state; // 0 = uninitialized, 1 = single done, 2 = iterating listpack, 3 = iterating hashtable
+    void *inner_it;
+} volatileSetIterator;
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
 int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
