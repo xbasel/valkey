@@ -161,7 +161,17 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-void activeExpireCycleFieldsTimed(uint64_t time_limit_us) {
+void activeExpireCycleFieldsProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    if (!server.active_expire_enabled || !iAmPrimary()) {
+        return;
+    }
+
+    uint64_t time_limit_us = 20000;
     uint64_t start = ustime();
     activeExpireFieldIterator it = server.active_expire_field_iterator;
 

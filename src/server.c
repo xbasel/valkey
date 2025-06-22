@@ -1281,7 +1281,6 @@ void databasesCron(void) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-            activeExpireCycleFieldsTimed(20000);
         }
     }
 
@@ -2984,6 +2983,13 @@ void initServer(void) {
      * from module threads. */
     if (aeCreateFileEvent(server.el, server.module_pipe[0], AE_READABLE, modulePipeReadable, NULL) == AE_ERR) {
         serverPanic("Error registering the readable event for the module pipe.");
+    }
+
+    /* A separate timer for client maintenance.  Runs at a variable speed depending
+ * on the client count. */
+    if (aeCreateTimeEvent(server.el, 1, activeExpireCycleFieldsProc, NULL, NULL) == AE_ERR) {
+        serverPanic("Can't create event activeExpireCycleFieldsProc timer.");
+        exit(1);
     }
 
     /* Register before and after sleep handlers (note this needs to be done

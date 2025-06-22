@@ -3655,7 +3655,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
-void activeExpireCycleFieldsTimed(uint64_t time_limit_us);
+void activeExpireCycleFieldsProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 void expireReplicaKeys(void);
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(void);
