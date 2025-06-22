@@ -161,108 +161,73 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-void activeExpireCycleFieldsTimed(ActiveExpireFieldIterator *it, uint64_t time_limit_us) {
+void activeExpireCycleFieldsTimed(uint64_t time_limit_us) {
     uint64_t start = ustime();
+    activeExpireFieldIterator it = server.active_expire_field_iterator;
 
     while (ustime() - start < time_limit_us) {
-        if (!it->kvs_it) {
-            if (it->next_db >= server.dbnum) {
-                it->next_db = 0;
-                return;
+        if (server.dbnum == 0) continue;
+
+        // Wrap around if needed
+        if (it.next_db >= server.dbnum) it.next_db = 0;
+
+        serverDb *db = server.db[it.next_db++];
+        if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) return;
+
+        // Pick a random volatile key
+        robj *key = dbRandomVolatileKey(db);
+        if (!key) continue;
+
+        volatile_set *vset = hashTypeGetVolatileSet(key);
+
+        vsetBucket *bucket = volatileSetGetOldestBucketBelow(vset, ustime());
+        if (!bucket) break;
+
+        switch (bucket->type) {
+            case VSET_BUCKET_SINGLE: {
+                void *entry = bucket->data.single;
+                if (checkAlreadyExpired(entryGetExpiry(entry))) {
+                    volatileSetExpireEntry(vset, db, key, entry);
+                }
+                break;
             }
 
-
-            it->db = server.db[it->next_db++];
-            if (!it->db) continue;
-
-            it->kvs_it = kvstoreIteratorInit(it->db->keys_with_volatile_items, HASHTABLE_ITER_SAFE);
-            it->current_key = NULL;
-        }
-
-        if (!it->current_key) {
-            void *next;
-            if (!kvstoreIteratorNext(it->kvs_it, &next)) {
-                kvstoreIteratorRelease(it->kvs_it);
-                it->kvs_it = NULL;
-                continue;
+            case VSET_BUCKET_LISTPACK: {
+                unsigned char *p = lpFirst(bucket->data.listpack);
+                while (p && ustime() - start < time_limit_us) {
+                    unsigned int slen;
+                    long long val;
+                    lpGetValue(p, &slen, &val);
+                    void *entry = (void *) (uintptr_t) val;
+                    if (checkAlreadyExpired(entryGetExpiry(entry))) {
+                        volatileSetExpireEntry(vset, db, key, entry);
+                    }
+                    if (bucket->type != VSET_BUCKET_LISTPACK) break;
+                    p = lpNext(bucket->data.listpack, p);
+                }
+                break;
             }
 
-            it->current_key = (robj *)next;
-        }
-
-        while (ustime() - start < time_limit_us) {
-            volatile_set *vset = hashTypeGetVolatileSet(it->current_key);
-            if (vset == NULL) break; // inefficient TODO
-            vsetBucket *bucket = volatileSetGetOldestBucketBelow(vset, ustime());
-            if (!bucket) break;
-
-            switch (bucket->type) {
-                case VSET_BUCKET_SINGLE: {
-                    void *entry = bucket->data.single;
-                    long long expiry = entryGetExpiry(entry);
-                    if (checkAlreadyExpired(expiry)) {
-                        sds key = objectGetKey(it->current_key);
-                        serverLog(LL_WARNING, "key %s field %s value %s expired",
-                                  key, entryGetField(entry), entryGetValue(entry));
-                        // volatileSetExpireEntry(vset, entry);
-
-                        if (vset->etypr->expire(it->db, it->current_key, entry)) {
-                            it->current_key = NULL;
-                            return;
-                        }
+            case VSET_BUCKET_HT: {
+                hashtableIterator hi;
+                hashtableInitIterator(&hi, bucket->data.hashtable, 0);
+                void *entry;
+                while (bucket->type == VSET_BUCKET_HT &&
+                       hashtableNext(&hi, &entry) &&
+                       ustime() - start < time_limit_us) {
+                    if (checkAlreadyExpired(entryGetExpiry(entry))) {
+                        volatileSetExpireEntry(vset, db, key, entry);
                     }
-                    break;
                 }
-
-                case VSET_BUCKET_LISTPACK: {
-                    unsigned char *p = lpFirst(bucket->data.listpack);
-                    while (p && ustime() - start < time_limit_us) {
-                        unsigned int slen;
-                        long long val;
-                        lpGetValue(p, &slen, &val);
-                        void *entry = (void *)(uintptr_t)val;
-                        long long expiry = entryGetExpiry(entry);
-                        if (checkAlreadyExpired(expiry)) {
-                            sds key = objectGetKey(it->current_key);
-                            serverLog(LL_WARNING, "key %s field %s value %s expired",
-                                      key, entryGetField(entry), entryGetValue(entry));
-                            // volatileSetExpireEntry(vset, entry);
-                            expireField(it->db, it->current_key, entry);
-                        }
-                        if (bucket->type != VSET_BUCKET_LISTPACK) break; // demoted to single ptr
-                        p = lpNext(bucket->data.listpack, p);
-                    }
-                    break;
-                }
-
-                case VSET_BUCKET_HT: {
-                    hashtableIterator hi;
-                    hashtableInitIterator(&hi, bucket->data.hashtable, 0);
-                    void *entry;
-                    while (bucket->type == VSET_BUCKET_HT && hashtableNext(&hi, &entry) && ustime() - start < time_limit_us) {
-                        long long expiry = entryGetExpiry(entry);
-                        if (checkAlreadyExpired(expiry)) {
-                            sds key = objectGetKey(it->current_key);
-                            serverLog(LL_WARNING, "key %s field %s value %s expired",
-                                      key, entryGetField(entry), entryGetValue(entry));
-                            // volatileSetExpireEntry(vset, entry);
-                            expireField(it->db, it->current_key, entryGetField(entry));
-                        }
-                    }
-                    break;
-                }
-
-                default:
-                    serverPanic("Unknown bucket type in activeExpireCycleFieldsTimed");
+                break;
             }
 
-            // remove expired/empty bucket, continue loop
-            // this is safe because volatileSetExpireEntry and removeEntry handle bucket cleanup
+            default:
+                serverPanic("Unknown bucket type");
         }
-
-        it->current_key = NULL;
     }
 }
+
 
 void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire

@@ -201,8 +201,14 @@ int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry,
     return 1;
 }
 
+static void logField(robj *key, void *entry) {
+    sds key2 = objectGetKey(key);
+    serverLog(LL_WARNING, "key %s field %s value %s expired",
+              key2, entryGetField(entry), entryGetValue(entry));
+}
+
 int volatileSetExpireEntry(volatile_set *set, void*serverDb, void*o, void *entry) {
-    volatileSetRemoveEntry(set, entry, set->etypr->getExpiry(entry));
+    logField(  o,entry);
     if (set->etypr->expire) {
         set->etypr->expire(serverDb,o,entry);
         return 1;
