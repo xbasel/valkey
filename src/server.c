@@ -3861,7 +3861,7 @@ void call(client *c, int flags) {
 
     /* Log the command into the commandlog if needed.
      * If the client is blocked we will handle commandlog when it is unblocked. */
-    if (update_command_stats && !c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
+    // if (update_command_stats && !c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.

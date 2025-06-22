@@ -108,7 +108,7 @@ static void hashTypeDeleteVolatileSet(robj *o) {
 void hashTypeTrackEntry(serverDb* db, robj *o, void *entry) {
     volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
     serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
-    kvstoreHashtableAdd(db->keys_with_volatile_items, 0, o);
+    kvstoreHashtableAdd(db->keys_with_volatile_items, 0, o); // move to hashTypeGetOrcreateVolatileSet
 }
 
 void hashTypeUntrackEntry(serverDb* db, robj *o, void *entry) {

@@ -3378,6 +3378,7 @@ int hashTypeSet(serverDb*db, robj *o, sds field, sds value, long long expiry, in
 robj *hashTypeDup(serverDb *db, robj *o);
 int hashTypeHasVolatileElements(robj *o);
 size_t hashTypeNumVolatileElements(robj *o);
+void hashTypeIgnoreTTL(robj *o, bool ignore);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
