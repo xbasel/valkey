@@ -36,6 +36,7 @@
  */
 
 #include "server.h"
+#include "volatile_set.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -160,6 +161,48 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     }
     return C_OK;
 }
+
+long long activeExpireCycleFieldsProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    if (!server.active_expire_enabled || !iAmPrimary()) {
+        return 1000 / server.hz;
+    }
+
+    uint64_t time_limit_us = 20000;
+    uint64_t start = ustime();
+    mstime_t now = mstime();
+    activeExpireFieldIterator it = server.active_expire_field_iterator;
+
+    while (ustime() - start < time_limit_us) {
+        if (server.dbnum == 0) continue;
+
+        // Wrap around if needed
+        if (it.next_db >= server.dbnum) it.next_db = 0;
+
+        serverDb *db = server.db[it.next_db++];
+        if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) return 1000 / server.hz;
+        ;
+
+        // Pick a random volatile key
+        robj *key = dbRandomVolatileKey(db);
+        if (!key) continue;
+
+        void *entry;
+        volatile_set *vset = hashTypeGetVolatileSet(key);
+        volatileSetIterator iter;
+
+        volatileSetStart(vset, &iter);
+        while (volatileSetNext(&iter, &entry)) {
+            if (!volatileSetExpireEntry(vset, &iter, now, db, key))
+                break;
+        }
+    }
+    return 1000 / server.hz;
+}
+
 
 void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire

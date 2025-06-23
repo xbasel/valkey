@@ -460,6 +460,31 @@ robj *dbRandomKey(serverDb *db) {
     }
 }
 
+/* Return a random key from db->keys_with_volatile_items, skipping logically expired keys.
+ * Does not retry internally — caller is responsible for retrying if NULL is returned.
+ * Returns a newly allocated key object (robj*), or NULL if none found or expired.
+ */
+robj *dbRandomVolatileKey(serverDb *db) {
+    if (kvstoreSize(db->keys_with_volatile_items) == 0) return NULL;
+
+    void *entry;
+    int didx = kvstoreGetFairRandomHashtableIndex(db->keys_with_volatile_items);
+    if (!kvstoreHashtableFairRandomEntry(db->keys_with_volatile_items, didx, &entry))
+        return NULL;
+
+    robj *valkey = entry;
+    // sds key = objectGetKey(valkey);
+    // robj *keyobj = createStringObject(key, sdslen(key));
+
+    // if (objectIsExpired(valkey) ||
+    //     expireIfNeededWithDictIndex(db, keyobj, valkey, 0, didx) != KEY_VALID) {
+    //     decrRefCount(keyobj); // TODO xbasel check logic
+    //     return NULL;
+    //     }
+
+    return valkey;
+}
+
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &pos);
@@ -486,6 +511,14 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         } else {
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
+
+        /* If deleting a hash object, remove TODO*/
+        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
+            kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr);
+        } else {
+            debugServerAssert(0 == kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr));
+        }
+
 
         if (async) {
             freeObjAsync(key, val, db->id);
@@ -586,6 +619,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         } else {
             kvstoreEmpty(dbarray[j]->keys, callback);
             kvstoreEmpty(dbarray[j]->expires, callback);
+            kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j]->avg_ttl = 0;
@@ -1552,7 +1586,7 @@ void copyCommand(client *c) {
     case OBJ_LIST: newobj = listTypeDup(o); break;
     case OBJ_SET: newobj = setTypeDup(o); break;
     case OBJ_ZSET: newobj = zsetDup(o); break;
-    case OBJ_HASH: newobj = hashTypeDup(o); break;
+    case OBJ_HASH: newobj = hashTypeDup(c->db, o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);

@@ -315,22 +315,6 @@ void serverLogFromHandler(int level, const char *fmt, ...) {
     serverLogRawFromHandler(level, msg);
 }
 
-/* Return the UNIX time in microseconds */
-long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-/* Return the UNIX time in milliseconds */
-mstime_t mstime(void) {
-    return ustime() / 1000;
-}
-
 /* Return the command time snapshot in milliseconds.
  * The time the command started is the logical time it runs,
  * and all the time readings during the execution time should
@@ -2804,6 +2788,7 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -2984,6 +2969,13 @@ void initServer(void) {
         serverPanic("Error registering the readable event for the module pipe.");
     }
 
+    /* A separate timer for client maintenance.  Runs at a variable speed depending
+     * on the client count. */
+    if (aeCreateTimeEvent(server.el, 1, activeExpireCycleFieldsProc, NULL, NULL) == AE_ERR) {
+        serverPanic("Can't create event activeExpireCycleFieldsProc timer.");
+        exit(1);
+    }
+
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
     aeSetBeforeSleepProc(server.el, beforeSleep);
@@ -3032,6 +3024,8 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    server.active_expire_field_iterator.next_db = 0;
 }
 
 void initListeners(void) {
@@ -6309,13 +6303,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
-            long long keys, vkeys;
+            long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
             vkeys = kvstoreSize(db->expires);
+            keysvitems = kvstoreSize(db->keys_with_volatile_items);
+
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl);
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,subexpiry=%lld\r\n", j, keys, vkeys,
+                                    db->avg_ttl, keysvitems);
             }
         }
     }
@@ -7363,7 +7359,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[1] == 'f' || opt[1] == 'F') &&
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
-                   next && 
+                   next &&
                    !(*flags & OBJ_SET_NX || *flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
         {
             *flags |= OBJ_SET_IFEQ;

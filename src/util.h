@@ -32,6 +32,7 @@
 
 #include <stdint.h>
 #include "sds.h"
+#include "monotonic.h"
 
 /* min/max */
 #undef min
@@ -109,5 +110,6 @@ void getRandomSeedCString(char *buff, size_t len);
 void setRandomSeedCString(char *seed_str, size_t len);
 void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
-
+long long ustime(void);
+mstime_t mstime(void);
 #endif

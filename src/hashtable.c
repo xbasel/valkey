@@ -45,6 +45,7 @@
  * - The original scan algorithm was designed by Pieter Noordhuis.
  */
 #include "hashtable.h"
+#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
