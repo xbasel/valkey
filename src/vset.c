@@ -1026,6 +1026,7 @@ static inline vsetBucket *removeFromBucket_HASHTABLE(vsetGetExpiryFunc getExpiry
     if (hashtableDelete(ht, entry)) {
         success = true;
         assert(hashtableSize(ht) > 0);
+        success = true;
         if (hashtableSize(ht) == 1) {
             // Downgrade to SINGLE
             hashtableIterator hi;

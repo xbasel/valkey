@@ -5341,7 +5341,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
 
         /* Handle deletion if value is VALKEYMODULE_HASH_DELETE. */
         if (value == VALKEYMODULE_HASH_DELETE) {
-            count += hashTypeDelete(key->value, field->ptr);
+            count += hashTypeDelete(key->db, key->value, field->ptr);
             if (flags & VALKEYMODULE_HASH_CFIELDS) decrRefCount(field);
             continue;
         }
@@ -5354,7 +5354,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags);
+        int updated = hashTypeSet(key->db, key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),

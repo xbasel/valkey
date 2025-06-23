@@ -483,6 +483,14 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
+        /* If deleting a hash object, remove TODO*/
+        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
+            kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr);
+        } else {
+            debugServerAssert(0 == kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr));
+        }
+
+
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {
@@ -499,6 +507,18 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
+}
+
+/* Add a volatile key for a hashtable with volatile fields */
+int dbAddVolatileKey(serverDb *db, robj *key) {
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, key);
+}
+
+/* Delete a volatile key for a hash key which no longer has field with ttl attached */
+int dbDeleteVolatileKey(serverDb *db, robj *key) {
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(key));
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -582,6 +602,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         } else {
             kvstoreEmpty(dbarray[j]->keys, callback);
             kvstoreEmpty(dbarray[j]->expires, callback);
+            kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j]->avg_ttl = 0;
@@ -1550,7 +1571,7 @@ void copyCommand(client *c) {
     case OBJ_LIST: newobj = listTypeDup(o); break;
     case OBJ_SET: newobj = setTypeDup(o); break;
     case OBJ_ZSET: newobj = zsetDup(o); break;
-    case OBJ_HASH: newobj = hashTypeDup(o); break;
+    case OBJ_HASH: newobj = hashTypeDup(c->db, o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);

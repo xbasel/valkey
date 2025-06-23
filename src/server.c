@@ -315,22 +315,6 @@ void serverLogFromHandler(int level, const char *fmt, ...) {
     serverLogRawFromHandler(level, msg);
 }
 
-/* Return the UNIX time in microseconds */
-long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-/* Return the UNIX time in milliseconds */
-mstime_t mstime(void) {
-    return ustime() / 1000;
-}
-
 /* Return the command time snapshot in milliseconds.
  * The time the command started is the logical time it runs,
  * and all the time readings during the execution time should
@@ -2714,6 +2698,7 @@ void resetServerStats(void) {
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
     server.stat_expiredkeys = 0;
+    server.stat_expiredfields = 0;
     server.stat_expired_stale_perc = 0;
     server.stat_expired_time_cap_reached_count = 0;
     server.stat_expire_cycle_time_used = 0;
@@ -2804,6 +2789,7 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -6080,6 +6066,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
                 "expired_keys:%lld\r\n", server.stat_expiredkeys,
+                "expired_fields:%lld\r\n", server.stat_expiredfields,
                 "expired_stale_perc:%.2f\r\n", server.stat_expired_stale_perc * 100,
                 "expired_time_cap_reached_count:%lld\r\n", server.stat_expired_time_cap_reached_count,
                 "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
@@ -6328,13 +6315,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
-            long long keys, vkeys;
+            long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
             vkeys = kvstoreSize(db->expires);
+            keysvitems = kvstoreSize(db->keys_with_volatile_items);
+
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl);
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,subexpiry=%lld\r\n", j, keys, vkeys,
+                                    db->avg_ttl, keysvitems);
             }
         }
     }

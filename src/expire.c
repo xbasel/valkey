@@ -35,6 +35,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include <assert.h>
+
 #include "server.h"
 
 /*-----------------------------------------------------------------------------
@@ -149,6 +151,17 @@ void expireScanCallback(void *privdata, void *entry) {
     data->sampled++;
 }
 
+int hashTypeExpireEntry(void *db, void *o, void *entry);
+
+void fieldExpireScanCallback(void *privdata, void *volaKey) {
+    activeExpireFieldIterator *iter = privdata;
+    serverAssert(volaKey);
+    serverAssert(hashTypeHasVolatileElements(volaKey));
+    iter->current_key = volaKey;
+    incrRefCount(iter->current_key);
+    assert(hashTypeHasVolatileElements(iter->current_key));
+}
+
 static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     long long numkeys = hashtableSize(ht);
     unsigned long buckets = hashtableBuckets(ht);
@@ -161,16 +174,116 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-void activeExpireCycle(int type) {
+static inline int activeExpireFieldsCheckTimeLimitReached(
+    unsigned int *iterations,
+    uint64_t start_us,
+    uint64_t limit_us,
+    uint64_t *now_us) {
+    if (((*iterations)++ & 0xf) == 0) {
+        *now_us = ustime();
+
+    }
+    return (*now_us - start_us >= limit_us);
+}
+
+
+void advanceDb(activeExpireFieldIterator *it) {
+    it->current_db++;
+    if (it->current_db>=server.dbnum) {
+        it->current_db = 0;
+        it->db_cursor = 0;
+    }
+    it->current_key = NULL;
+}
+
+static inline int effort(void) {
+    return server.active_expire_effort - 1;
+}
+
+void hashKeyDone(activeExpireFieldIterator *it) {
+    serverAssert(it->current_key);
+    serverAssert(it->current_key->refcount >= 1);
+    decrRefCount(it->current_key);
+    it->current_key = NULL;
+}
+
+vset *hashTypeGetVolatileSet(robj *o);
+
+/*
+ * activeExpireCycleFields
+ *
+ * This function incrementally expires hash fields that use field-level TTL
+ * stored in volatile sets. It traverses all databases, scanning keys
+ * known to hold volatile fields, and then iterates those fields to reclaim
+ * memory for logically expired elements that were not accessed by clients.
+ *
+ * Field expiry is performed within a strict time budget and an entries-per-loop
+ * limit to protect latency and CPU usage. An activeExpireFieldIterator tracks
+ * which key and volatile set are currently being processed. Expired fields are
+ * removed, and if the hash becomes empty, the parent key is deleted as well.
+ *
+ */
+void activeExpireCycleFields(int type, unsigned long entries_per_call, long long time_limit_us) {
+    if (type != ACTIVE_EXPIRE_CYCLE_SLOW) return;
+    if (!server.active_expire_enabled || !iAmPrimary() || server.dbnum == 0) return;
+
+    unsigned int iterations = 0;
+    uint64_t start = ustime();
+    uint64_t now = start;
+    activeExpireFieldIterator *it = &server.active_expire_field_iterator;
+    int dbs_performed = 0;
+
+    while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
+               &iterations, start, time_limit_us, &now)) {
+        serverDb *db = server.db[it->current_db];
+        if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
+            advanceDb(it);
+            dbs_performed++;
+            continue;
+        }
+
+        size_t entries_processed = 0;
+        while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
+                   &iterations, start, time_limit_us, &now)) {
+            if (!it->current_key) {
+                it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
+                                            isExpiryTableValidForSamplingCb, it);
+            } else if (it->current_key->refcount == 1) {
+                hashKeyDone(it);
+            }
+
+            if (it->current_key) {
+                size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t) (now / 1000),
+                                                             entries_per_call);
+                entries_processed += expired;
+                bool hasMore = hashTypeHasVolatileElements(it->current_key);
+                if (!hasMore || expired < entries_per_call) {
+                    hashKeyDone(it);
+                }
+            }
+
+            if (!it->current_key && it->db_cursor == 0) {
+                advanceDb(it);
+                dbs_performed++;
+                break;
+            }
+        }
+    }
+
+    if (activeExpireFieldsCheckTimeLimitReached(&iterations, start, time_limit_us, &now)) {
+        server.stat_expired_time_cap_reached_count++;
+    }
+}
+
+
+void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long long timelimit) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
-    unsigned long effort = server.active_expire_effort - 1, /* Rescale from 0 to 9. */
-        config_keys_per_loop = ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort,
-                  config_cycle_fast_duration =
-                      ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * effort,
-                  config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * effort,
-                  config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - effort;
+
+    unsigned long config_cycle_fast_duration =
+                      ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * effort();
+    unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - effort();
 
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
@@ -181,7 +294,7 @@ void activeExpireCycle(int type) {
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
-    long long start = ustime(), timelimit, elapsed;
+    long long start = ustime(), elapsed;
 
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we
@@ -209,13 +322,8 @@ void activeExpireCycle(int type) {
      * expired keys to use memory for too much time. */
     if (dbs_per_call > server.dbnum || timelimit_exit) dbs_per_call = server.dbnum;
 
-    /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
-     * time per iteration. Since this function gets called with a frequency of
-     * server.hz times per second, the following is the max amount of
-     * microseconds we can spend in this function. */
-    timelimit = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+
     timelimit_exit = 0;
-    if (timelimit <= 0) timelimit = 1;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit = config_cycle_fast_duration; /* in microseconds. */
 
@@ -374,6 +482,83 @@ void activeExpireCycle(int type) {
     } else
         current_perc = 0;
     server.stat_expired_stale_perc = (current_perc * 0.05) + (server.stat_expired_stale_perc * 0.95);
+}
+
+/* expiryDriver abstracts expiry routines with a unified signature,
+ * allowing activeExpireCycle to alternate keys and fields cleanly. */
+typedef void expiryDriver(int type, unsigned long entries_per_loop, long long timelimit);
+
+/*
+ * activeExpireCycle
+ *
+ * This function performs active expiration of both normal keys (with TTL)
+ * and hash fields (with field-level TTL via volatile sets). Its purpose is to
+ * reclaim memory from logically expired entries.
+ *
+ * The expiry is performed incrementally over multiple databases, respecting
+ * a CPU time budget derived from the configured active-expire-effort.
+ *
+ * There are two separate expiry mechanisms for keys and for hash fields
+ * because their iteration models are fundamentally different:
+ * - key expiry operates on db->key entries, scanning random keys
+ *   with attached TTL entries.
+ * - field expiry operates on db->key->volatile_set entries, scanning
+ *   fields within a hash that each have their own TTL.
+ * This hierarchy and lookup pattern are entirely different, requiring
+ * separate cursors, iteration logic, and data structure handling.
+ *
+ * The function uses an alternating scheme across event loop cycles: on one
+ * cycle it will prioritize key expiry first, then hash field expiry if time
+ * permits; on the next cycle, it will prioritize hash field expiry first,
+ * then key expiry if time permits. This ensures fairness and prevents
+ * starvation of either mechanism. Since the memory reclaim pace and iteration
+ * model of keys versus hash fields are different and unpredictable,
+ * alternating naturally balances the overall expiry effort when both are
+ * fully consuming their available time budget.
+ *
+ * Note that field expiry is only performed during the slow iteration cycles,
+ * as it is not scheduled to run in the fast cycle.
+ */
+void activeExpireCycle(int type) {
+
+    /* Adjust the running parameters according to the configured expire
+     * effort. The default effort is 1, and the maximum configurable effort
+     * is 10. */
+    unsigned long config_keys_per_loop =
+            ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort();
+    unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * effort();
+
+
+    static int expireCycleStartWithFields = 0;
+
+    /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
+    * time per iteration. Since this function gets called with a frequency of
+    * server.hz times per second, the following is the max amount of
+    * microseconds we can spend in this function. */
+    long long timelimit = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+
+    if (timelimit <= 0) timelimit = 1;
+
+    expiryDriver *first, *second;
+
+    if (expireCycleStartWithFields) {
+        first = activeExpireCycleFields;
+        second = activeExpireCycleKeys;
+    } else {
+        first = activeExpireCycleKeys;
+        second = activeExpireCycleFields;
+    }
+
+    long long start = ustime();
+    first(type, config_keys_per_loop, timelimit);
+    long long elapsed = ustime() - start;
+
+    if (elapsed < timelimit) {
+        second(type, config_keys_per_loop, timelimit);
+    }
+
+    expireCycleStartWithFields = !expireCycleStartWithFields;
+
 }
 
 /*-----------------------------------------------------------------------------
