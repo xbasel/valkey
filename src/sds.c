@@ -34,15 +34,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
-#include <math.h>
 #include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"
 #include "util.h"
-
-#ifndef min
-#define min(a, b) ((a) < (b) ? (a) : (b))
-#endif
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
