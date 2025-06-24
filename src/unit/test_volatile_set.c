@@ -2,7 +2,7 @@
 #include "../volatile_set.h"
 #include "../listpack.h"
 #include "../server.h"
-
+#include "entry.h"
 #include "test_help.h"
 
 #include <stdio.h>
@@ -14,17 +14,29 @@
 #include <unistd.h>
 
 
-typedef struct {
-    sds key;
-    long long expiry;
-} mock_entry;
+typedef entry mock_entry;
+
+static mock_entry *mockCreateEntry(const char *keystr, long long expiry) {
+    sds field = sdsnew(keystr);
+    mock_entry *e = entryCreate(field, sdsnew("value"), expiry);
+    sdsfree(field);
+    return e;
+}
+
+static mock_entry *mockEntryUpdate(mock_entry *entry, long long expiry) {
+    return entryUpdate(entry, NULL, expiry);
+}
 
 static sds mockGetKey(const void *entry) {
-    return sdsdup(((mock_entry *)entry)->key);
+    return (sds)entry;
 }
 
 static long long mockGetExpiry(const void *entry) {
-    return ((mock_entry *)entry)->expiry;
+    return entryGetExpiry(entry);
+}
+
+static void mockFreeEntry(void *entry) {
+    entryFree(entry);
 }
 
 static int mockExpire(void *db, void *o, void *entry) {
@@ -48,11 +60,11 @@ int test_volatile_set_add_and_iterate(int argc, char **argv, int flags) {
     volatile_set *set = createVolatileSet(&type);
     TEST_ASSERT(set != NULL);
 
-    mock_entry e1 = {.key = sdsnew("item1"), .expiry = 123};
-    mock_entry e2 = {.key = sdsnew("item2"), .expiry = 456};
+    mock_entry *e1 = mockCreateEntry("item1", 123);
+    mock_entry *e2 = mockCreateEntry("item2", 456);
 
-    TEST_ASSERT(volatileSetAddEntry(set, &e1, e1.expiry));
-    TEST_ASSERT(volatileSetAddEntry(set, &e2, e2.expiry));
+    TEST_ASSERT(volatileSetAddEntry(set, e1, mockGetExpiry(e1)));
+    TEST_ASSERT(volatileSetAddEntry(set, e2, mockGetExpiry(e2)));
 
     TEST_ASSERT(!volatileSetIsEmpty(set));
 
@@ -70,8 +82,8 @@ int test_volatile_set_add_and_iterate(int argc, char **argv, int flags) {
 
     volatileSetReset(&it);
     freeVolatileSet(set);
-    sdsfree(e1.key);
-    sdsfree(e2.key);
+    mockFreeEntry(e1);
+    mockFreeEntry(e2);
 
     TEST_PRINT_INFO("Test passed with %d expects", failed_expects);
     return 0;
@@ -99,11 +111,9 @@ int test_volatile_set_large_batch_same_expiry(int argc, char **argv, int flags) 
     TEST_ASSERT(entries != NULL);
 
     for (int i = 0; i < total_entries; i++) {
-        entries[i] = zmalloc(sizeof(mock_entry));
         char key_buf[32];
         snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
-        entries[i]->key = sdsnew(key_buf);
-        entries[i]->expiry = expiry_time;
+        entries[i] = mockCreateEntry(key_buf, expiry_time);
         TEST_ASSERT(volatileSetAddEntry(set, entries[i], expiry_time));
     }
 
@@ -127,8 +137,7 @@ int test_volatile_set_large_batch_same_expiry(int argc, char **argv, int flags) 
     freeVolatileSet(set);
 
     for (int i = 0; i < total_entries; i++) {
-        sdsfree(entries[i]->key);
-        zfree(entries[i]);
+        mockFreeEntry(entries[i]);
     }
     zfree(entries);
 
@@ -140,7 +149,7 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
     (void)argc;
     (void)argv;
     (void)flags;
-
+    const unsigned int total_entries = 5;
     volatileEntryType type = {
         .entryGetKey = mockGetKey,
         .getExpiry = mockGetExpiry,
@@ -151,19 +160,15 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
     TEST_ASSERT(set != NULL);
 
     // Prepare entries with mixed expiry times, some duplicates
-    mock_entry entries[] = {
-        {.key = NULL, .expiry = 1000},
-        {.key = NULL, .expiry = 2000},
-        {.key = NULL, .expiry = 1000},
-        {.key = NULL, .expiry = 3000},
-        {.key = NULL, .expiry = 2000}};
+    mock_entry *entries[total_entries];
 
     // Initialize keys
-    for (int i = 0; i < (int)(sizeof(entries) / sizeof(entries[0])); i++) {
+    for (unsigned int i = 0; i < total_entries; i++) {
         char key_buf[32];
         snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
-        entries[i].key = sdsnew(key_buf);
-        TEST_ASSERT(volatileSetAddEntry(set, &entries[i], entries[i].expiry));
+        long long expiry_time = rand() % 10000;
+        entries[i] = mockCreateEntry(key_buf, expiry_time);
+        TEST_ASSERT(volatileSetAddEntry(set, entries[i], expiry_time));
     }
 
     volatileSetIterator it;
@@ -179,7 +184,7 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
 
         // Match the entries we inserted
         for (int i = 0; i < 5; i++) {
-            if (strcmp(e->key, entries[i].key) == 0) {
+            if (strcmp(entryGetField(e), entryGetField(entries[i])) == 0) {
                 found[i] = 1;
                 break;
             }
@@ -195,7 +200,7 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
 
     volatileSetReset(&it);
     freeVolatileSet(set);
-    for (int i = 0; i < 5; i++) sdsfree(entries[i].key);
+    for (int i = 0; i < 5; i++) mockFreeEntry(entries[i]);
 
     TEST_PRINT_INFO("Iterated all %d mixed expiry entries successfully", total);
     return 0;
@@ -212,11 +217,11 @@ int mock_entry_count = 0;
 
 /* --------- volatileEntryType Callbacks --------- */
 sds mock_entry_get_key(const void *entry) {
-    return ((mock_entry *)entry)->key;
+    return (sds)entry;
 }
 
 long long mock_entry_get_expiry(const void *entry) {
-    return ((mock_entry *)entry)->expiry;
+    return mockGetExpiry(entry);
 }
 
 int mock_entry_expire(void *db, void *o, void *entry) {
@@ -225,8 +230,7 @@ int mock_entry_expire(void *db, void *o, void *entry) {
     mock_entry *e = (mock_entry *)entry;
     for (int i = 0; i < mock_entry_count; i++) {
         if (mock_entries[i] == e) {
-            sdsfree(e->key);
-            zfree(e);
+            mockFreeEntry(e);
             mock_entries[i] = mock_entries[--mock_entry_count];
             return 1;
         }
@@ -236,10 +240,7 @@ int mock_entry_expire(void *db, void *o, void *entry) {
 
 /* --------- Helper Functions --------- */
 mock_entry *mock_entry_create(const char *keystr, long long expiry) {
-    mock_entry *e = zmalloc(sizeof(mock_entry));
-    e->key = sdsnew(keystr);
-    e->expiry = expiry;
-    return e;
+    return mockCreateEntry(keystr, expiry);
 }
 
 int insert_mock_entry(volatile_set *set) {
@@ -260,13 +261,10 @@ int update_mock_entry(volatile_set *set) {
     if (mock_entry_count == 0) return 0;
     int idx = rand() % mock_entry_count;
     mock_entry *old = mock_entries[idx];
-
-    long long new_expiry = old->expiry + (rand() % 500);
-    mock_entry *updated = mock_entry_create(old->key, new_expiry);
-    TEST_ASSERT(volatileSetUpdateEntry(set, old, updated, old->expiry, new_expiry));
-    sdsfree(old->key);
-    zfree(old);
-
+    long long old_expiry = mockGetExpiry(old);
+    long long new_expiry = old_expiry + (rand() % 500);
+    mock_entry *updated = mockEntryUpdate(old, new_expiry);
+    TEST_ASSERT(volatileSetUpdateEntry(set, old, updated, old_expiry, new_expiry));
     mock_entries[idx] = updated;
     return 0;
 }
@@ -275,9 +273,8 @@ int remove_mock_entry(volatile_set *set) {
     if (mock_entry_count == 0) return 0;
     int idx = rand() % mock_entry_count;
     mock_entry *e = mock_entries[idx];
-    TEST_ASSERT(volatileSetRemoveEntry(set, e, e->expiry));
-    sdsfree(e->key);
-    zfree(e);
+    TEST_ASSERT(volatileSetRemoveEntry(set, e, mockGetExpiry(e)));
+    mockFreeEntry(e);
     mock_entries[idx] = mock_entries[--mock_entry_count];
 
     return 0;
@@ -300,9 +297,9 @@ int expire_mock_entries(volatile_set *set, mstime_t now) {
 int free_mock_entries(void) {
     for (int i = 0; i < mock_entry_count; i++) {
         mock_entry *e = mock_entries[i];
-        sdsfree(e->key);
-        zfree(e);
+        mockFreeEntry(e);
     }
+    return 0;
 }
 
 /* --------- Fuzzer Test --------- */
