@@ -30,14 +30,15 @@ typedef struct {
 } volatile_set;
 
 typedef struct volatileSetIterator {
-    int iteration_state;
     raxIterator bucket;
     /* Different bucket iterator types */
     hashtableIterator hiter;
     uint32_t viter;
     void *entry;
     long long bucket_ts;
-
+    //volatile_set *set;
+    int iteration_state;
+    
 } volatileSetIterator;
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
