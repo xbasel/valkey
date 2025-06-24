@@ -185,7 +185,13 @@ void activeExpireCycleFields(unsigned long time_limit_us) {
     mstime_t now = start / 1000;
     activeExpireFieldIterator it = server.active_expire_field_iterator;
 
+    if (it.next_db >= server.dbnum) it.next_db = 0;
+    const int start_db = it.next_db;
+
     while (1) {
+        // All databases were processed
+        if (it.next_db == start_db) return;
+
         if (activeExpireFieldsCheckTimeLimit(&iterations, start, time_limit_us, &now)) return;
 
         // Wrap around if needed
