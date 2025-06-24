@@ -2969,13 +2969,6 @@ void initServer(void) {
         serverPanic("Error registering the readable event for the module pipe.");
     }
 
-    /* A separate timer for client maintenance.  Runs at a variable speed depending
-     * on the client count. */
-    if (aeCreateTimeEvent(server.el, 1, activeExpireCycleFieldsProc, NULL, NULL) == AE_ERR) {
-        serverPanic("Can't create event activeExpireCycleFieldsProc timer.");
-        exit(1);
-    }
-
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
     aeSetBeforeSleepProc(server.el, beforeSleep);

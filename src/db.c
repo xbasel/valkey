@@ -460,29 +460,31 @@ robj *dbRandomKey(serverDb *db) {
     }
 }
 
-/* Return a random key from db->keys_with_volatile_items, skipping logically expired keys.
- * Does not retry internally — caller is responsible for retrying if NULL is returned.
- * Returns a newly allocated key object (robj*), or NULL if none found or expired.
- */
+// Returns a random volatile key from the DB, retrying up to 100 times; returns NULL if none found.
 robj *dbRandomVolatileKey(serverDb *db) {
     if (kvstoreSize(db->keys_with_volatile_items) == 0) return NULL;
 
-    void *entry;
-    int didx = kvstoreGetFairRandomHashtableIndex(db->keys_with_volatile_items);
-    if (!kvstoreHashtableFairRandomEntry(db->keys_with_volatile_items, didx, &entry))
-        return NULL;
+    for (int i = 0; i < 100; i++) {
+        void *entry;
+        int didx = kvstoreGetFairRandomHashtableIndex(db->keys_with_volatile_items);
+        if (!kvstoreHashtableFairRandomEntry(db->keys_with_volatile_items, didx, &entry))
+            continue;
 
-    robj *valkey = entry;
-    // sds key = objectGetKey(valkey);
-    // robj *keyobj = createStringObject(key, sdslen(key));
+        robj *valkey = entry;
 
-    // if (objectIsExpired(valkey) ||
-    //     expireIfNeededWithDictIndex(db, keyobj, valkey, 0, didx) != KEY_VALID) {
-    //     decrRefCount(keyobj); // TODO xbasel check logic
-    //     return NULL;
-    //     }
+        // sds key = objectGetKey(valkey);
+        // robj *keyobj = createStringObject(key, sdslen(key));
 
-    return valkey;
+        // if (objectIsExpired(valkey) ||
+        //     expireIfNeededWithDictIndex(db, keyobj, valkey, 0, didx) != KEY_VALID) {
+        //     decrRefCount(keyobj); // TODO xbasel check logic
+        //     return NULL;
+        //     }
+
+        return valkey;
+    }
+
+    return NULL;
 }
 
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
