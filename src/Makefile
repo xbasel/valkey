@@ -23,9 +23,9 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
-		OPTIMIZATION+=
+		OPTIMIZATION+=-flto
 	else
-		OPTIMIZATION+==auto -ffat-lto-objects
+		OPTIMIZATION+=-flto=auto -ffat-lto-objects
 	endif
 endif
 ifneq ($(OPTIMIZATION),-O0)
