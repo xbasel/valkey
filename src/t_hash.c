@@ -48,6 +48,7 @@ int hashTypeExpireEntry(void *db, void *o, void *entry);
 volatileEntryType hashVolatileEntryType = {
     .entryGetKey = (sds(*)(const void *entry))entryGetField,
     .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
+    .expire =  (int (*)(void *db, void *o, void *entry))hashTypeExpireEntry
 };
 
 /*-----------------------------------------------------------------------------
@@ -139,7 +140,7 @@ static void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, voi
     }
 }
 
-int expireField(serverDb *db, robj *o, void *entry) {
+int hashTypeExpireEntry(void *db, void *o, void *entry) {
     hashTypeIgnoreTTL(o, 1);
     if (hashTypeDelete(db, o, entry)) {
         if (hashTypeLength(o) == 0) {
@@ -152,11 +153,6 @@ int expireField(serverDb *db, robj *o, void *entry) {
     }
     hashTypeIgnoreTTL(o, 0); // TODO xbasel, we need to reset the original ignore value
     return 0;
-}
-
-int hashTypeExpireEntry(void *db, void *o, void *entry) {
-    // TBD
-    return expireField(db, o, entry);
 }
 
 hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {

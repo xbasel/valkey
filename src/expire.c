@@ -162,29 +162,43 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-long long activeExpireCycleFieldsProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
-    UNUSED(eventLoop);
-    UNUSED(id);
-    UNUSED(clientData);
-
-    if (!server.active_expire_enabled || !iAmPrimary()) {
-        return 1000 / server.hz;
+static inline int activeExpireFieldsCheckTimeLimit(
+    unsigned int *iterations,
+    uint64_t start_us,
+    uint64_t limit_us,
+    mstime_t *now_ms)
+{
+    if (((*iterations)++ & 0xf) == 0) {
+        uint64_t now_us = ustime();
+        *now_ms = now_us / 1000;
+        return (now_us - start_us >= limit_us);
     }
+    return 0;
+}
 
-    uint64_t time_limit_us = 20000;
+void activeExpireCycleFields(unsigned long time_limit_us) {
+    if (!server.active_expire_enabled || !iAmPrimary() || server.dbnum == 0) {
+        return;
+    }
+    unsigned int iterations = 0;
     uint64_t start = ustime();
-    mstime_t now = mstime();
+    mstime_t now = start / 1000;
     activeExpireFieldIterator it = server.active_expire_field_iterator;
 
-    while (ustime() - start < time_limit_us) {
-        if (server.dbnum == 0) continue;
+    if (it.next_db >= server.dbnum) it.next_db = 0;
+    const int start_db = it.next_db;
+
+    while (1) {
+        // All databases were processed
+        if (it.next_db == start_db) return;
+
+        if (activeExpireFieldsCheckTimeLimit(&iterations, start, time_limit_us, &now)) return;
 
         // Wrap around if needed
         if (it.next_db >= server.dbnum) it.next_db = 0;
 
         serverDb *db = server.db[it.next_db++];
-        if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) return 1000 / server.hz;
-        ;
+        if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) continue;
 
         // Pick a random volatile key
         robj *key = dbRandomVolatileKey(db);
@@ -196,11 +210,10 @@ long long activeExpireCycleFieldsProc(struct aeEventLoop *eventLoop, long long i
 
         volatileSetStart(vset, &iter);
         while (volatileSetNext(&iter, &entry)) {
-            if (!volatileSetExpireEntry(vset, &iter, now, db, key))
-                break;
+            if (!volatileSetExpireEntry(vset, &iter, now, db, key))  break;
+            if (activeExpireFieldsCheckTimeLimit(&iterations, start, time_limit_us, &now)) return;
         }
     }
-    return 1000 / server.hz;
 }
 
 
@@ -259,6 +272,13 @@ void activeExpireCycle(int type) {
     timelimit = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
+
+    if (type == ACTIVE_EXPIRE_CYCLE_SLOW) {
+        unsigned long field_timelimit = timelimit / 4; // upt o %25 of
+        if (field_timelimit == 0 && timelimit > 0)
+            field_timelimit = timelimit;
+        activeExpireCycleFields(field_timelimit);
+    }
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit = config_cycle_fast_duration; /* in microseconds. */
 
