@@ -1,17 +1,14 @@
-#include "../hashtable.h"
 #include "../volatile_set.h"
-#include "../listpack.h"
-#include "../server.h"
-#include "entry.h"
+#include "../entry.h"
 #include "test_help.h"
-
+#include "../zmalloc.h"
 #include <stdio.h>
 #include <limits.h>
 #include <string.h>
-#include <math.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <time.h>
 
 
 typedef entry mock_entry;
@@ -36,6 +33,7 @@ static long long mockGetExpiry(const void *entry) {
 }
 
 static void mockFreeEntry(void *entry) {
+    // printf("mockFreeEntry: %p\n", entry);
     entryFree(entry);
 }
 
@@ -230,6 +228,7 @@ int mock_entry_expire(void *db, void *o, void *entry) {
     mock_entry *e = (mock_entry *)entry;
     for (int i = 0; i < mock_entry_count; i++) {
         if (mock_entries[i] == e) {
+            // printf("expire entry %p with expiry %llu\n", e, mockGetExpiry(e));
             mockFreeEntry(e);
             mock_entries[i] = mock_entries[--mock_entry_count];
             return 1;
@@ -244,16 +243,15 @@ mock_entry *mock_entry_create(const char *keystr, long long expiry) {
 }
 
 int insert_mock_entry(volatile_set *set) {
+    if (mock_entry_count >= MAX_ENTRIES) return 0;
     char keybuf[32];
     snprintf(keybuf, sizeof(keybuf), "key_%d", rand());
 
     long long expiry = rand() % 10000 + 100;
     mock_entry *e = mock_entry_create(keybuf, expiry);
+    // printf("adding entry %p with expiry %llu\n", e, expiry);
     TEST_ASSERT(volatileSetAddEntry(set, e, expiry));
-
-    if (mock_entry_count < MAX_ENTRIES) {
-        mock_entries[mock_entry_count++] = e;
-    }
+    mock_entries[mock_entry_count++] = e;
     return 0;
 }
 
@@ -264,8 +262,9 @@ int update_mock_entry(volatile_set *set) {
     long long old_expiry = mockGetExpiry(old);
     long long new_expiry = old_expiry + (rand() % 500);
     mock_entry *updated = mockEntryUpdate(old, new_expiry);
-    TEST_ASSERT(volatileSetUpdateEntry(set, old, updated, old_expiry, new_expiry));
     mock_entries[idx] = updated;
+    // printf("Update entry %p with entry %p with old expiry %llu new expiry %llu\n", old, updated, old_expiry, new_expiry);
+    TEST_ASSERT(volatileSetUpdateEntry(set, old, updated, old_expiry, new_expiry));
     return 0;
 }
 
@@ -273,6 +272,7 @@ int remove_mock_entry(volatile_set *set) {
     if (mock_entry_count == 0) return 0;
     int idx = rand() % mock_entry_count;
     mock_entry *e = mock_entries[idx];
+    // printf("removing entry %p with expiry %llu\n", e, mockGetExpiry(e));
     TEST_ASSERT(volatileSetRemoveEntry(set, e, mockGetExpiry(e)));
     mockFreeEntry(e);
     mock_entries[idx] = mock_entries[--mock_entry_count];
@@ -281,16 +281,14 @@ int remove_mock_entry(volatile_set *set) {
 }
 
 int expire_mock_entries(volatile_set *set, mstime_t now) {
-    volatileSetIterator it;
-    volatileSetStart(set, &it);
     void *entry;
-    while (volatileSetNext(&it, &entry)) {
-        if (mock_entry_get_expiry(entry) <= now) {
-            volatileSetExpireEntry(set, &it, now, NULL, NULL);
+    do {
+        entry = volatileSetdPopExpired(set, now);
+        if (entry) {
+            // printf("pop expire entry %p with expiry %llu\n", entry, mockGetExpiry(entry));
+            mock_entry_expire(NULL, NULL, entry);
         }
-    }
-    volatileSetReset(&it);
-
+    } while (entry);
     return 0;
 }
 

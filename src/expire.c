@@ -166,8 +166,7 @@ static inline int activeExpireFieldsCheckTimeLimit(
     unsigned int *iterations,
     uint64_t start_us,
     uint64_t limit_us,
-    mstime_t *now_ms)
-{
+    mstime_t *now_ms) {
     if (((*iterations)++ & 0xf) == 0) {
         uint64_t now_us = ustime();
         *now_ms = now_us / 1000;
@@ -209,8 +208,8 @@ void activeExpireCycleFields(unsigned long time_limit_us) {
         volatileSetIterator iter;
 
         volatileSetStart(vset, &iter);
-        while (volatileSetNext(&iter, &entry)) {
-            if (!volatileSetExpireEntry(vset, &iter, now, db, key))  break;
+        while ((entry = volatileSetFirstExpired(vset, now))) {
+            vset->etypr->expire(db, key, entry);
             if (activeExpireFieldsCheckTimeLimit(&iterations, start, time_limit_us, &now)) return;
         }
     }

@@ -12,7 +12,6 @@
 
 #define VOLATILESET_BUCKET_INTERVAL_MAX (1LL << 13LL) // 2^13 = 8192 milliseconds
 #define VOLATILESET_BUCKET_INTERVAL_MIN (1LL << 4LL)  // 2^4 = 16 milliseconds
-#define VOLATILESET_BUCKET_GRANULARITY VOLATILESET_BUCKET_INTERVAL
 
 typedef struct {
     sds (*entryGetKey)(const void *entry);
@@ -43,7 +42,8 @@ typedef struct volatileSetIterator {
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
 int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
-int volatileSetExpireEntry(volatile_set *set, volatileSetIterator *it, mstime_t now, void *serverDb, void *o);
+void *volatileSetdPopExpired(volatile_set *set, mstime_t now);
+void *volatileSetFirstExpired(volatile_set *set, mstime_t now);
 int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool volatileSetIsEmpty(volatile_set *set);
 void volatileSetStart(volatile_set *set, volatileSetIterator *it);

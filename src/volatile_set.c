@@ -1,16 +1,12 @@
 #include <string.h>
 #include "volatile_set.h"
 #include "rax.h"
-#include "unit/test_help.h"
 #include "zmalloc.h"
-#include "config.h"
 #include "endianconv.h"
 #include "serverassert.h"
 #include "hashtable.h"
-#include "vector.h"
 #include "server.h"
 #include <stdint.h>
-#include "util.h"
 
 /*************************************************************************************************************
  *                                pointer_vector Implementation
@@ -186,8 +182,9 @@ pointer_vector *pv_split(pointer_vector **sv_ptr, uint32_t split_index) {
     // Allocate new vector for right part
     size_t item_bytes = sizeof(void *);
     size_t total_bytes = sizeof(pointer_vector) + right_len * item_bytes;
-    pointer_vector *right = zmalloc(total_bytes);
-    right->alloc = right_len;
+    size_t new_alloc;
+    pointer_vector *right = zmalloc_usable(total_bytes, &new_alloc);
+    right->alloc = new_alloc;
     right->len = right_len;
 
     // Copy the right part
@@ -319,6 +316,16 @@ void pv_free(pointer_vector *sv) {
     if (sv) zfree(sv);
 }
 
+uint32_t pv_find(pointer_vector *sv, void *elem) {
+    if (!sv || sv->len == 0) return 0;
+
+    for (uint32_t i = 0; i < sv->len; i++) {
+        if (sv->data[i] == elem) {
+            return i;
+        }
+    }
+    return sv->len;
+}
 /*************************************************************************************************************
  *                                pointer_vector End
  *************************************************************************************************************/
@@ -400,6 +407,32 @@ static inline long long get_bucket_ts(long long expiry) {
     return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MIN;
 }
 
+static inline long long get_max_bucket_ts(long long expiry) {
+    return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MAX;
+}
+
+static inline size_t encodeExpiryKey(long long expiry, unsigned char *key) {
+    long long be_ts = htonu64(expiry);
+    size_t size = sizeof(be_ts);
+    memcpy(key, &be_ts, size);
+    return size;
+}
+
+static inline long long decodeExpiryKey(unsigned char *key) {
+    long long res;
+    memcpy(&res, key, sizeof(res));
+    res = ntohu64(res);
+    return res;
+}
+
+static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
+    long long bucket_ts = get_max_bucket_ts(expiry);
+    long long be_ts = htonu64(bucket_ts);
+    size_t size = sizeof(be_ts);
+    memcpy(key, &be_ts, size);
+    return size;
+}
+
 /**
  * Performs binary search to find the index where the element should be inserted.
  * Returns the index where the element should be placed to keep the array sorted.
@@ -470,31 +503,45 @@ uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, void *entr
  * This guarantees that each vector contains elements with the same bucket timestamp,
  * and no value in the first part maps to the same or later bucket as the second part.
  */
-uint32_t _find_split_position(volatile_set *set, vsetBucket *bucket, long long *split_ts) {
+uint32_t _find_split_position(volatile_set *set, vsetBucket *bucket, long long *split_ts_out) {
     pointer_vector *sv = vsetBucketVector(bucket);
 
     if (!sv || sv->len < 2) return sv->len;
 
-    uint32_t left = 1, right = sv->len - 1;
+    if (!sv || sv->len < 2) return sv ? sv->len : 0;
+
+    uint32_t left = 1;
+    uint32_t right = sv->len - 1;
     uint32_t best_split = sv->len;
+    uint32_t mid_closest_to_center = sv->len / 2;
+    long long best_split_ts = 0;
 
     while (left <= right) {
         uint32_t mid = (left + right) / 2;
-        long long prev_bucket_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid - 1)));
-        long long curr_bucket_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid)));
 
-        int cmp = EXPIRE_COMPARE(prev_bucket_ts, curr_bucket_ts);
+        long long prev_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid - 1)));
+        long long curr_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid)));
 
-        if (cmp < 0) {
-            if (split_ts) *split_ts = prev_bucket_ts;
-            best_split = mid;
-            right = mid - 1; /* try to find an earlier valid split */
+        if (prev_ts != curr_ts) {
+            // Check if closer to center
+            if (best_split == sv->len ||
+                abs((int)mid - (int)mid_closest_to_center) < abs((int)best_split - (int)mid_closest_to_center)) {
+                best_split = mid;
+                best_split_ts = prev_ts;
+            }
+            right = mid - 1;
         } else {
             left = mid + 1;
         }
     }
 
-    return best_split; /* may equal sv->len if no valid split found */
+    if (split_ts_out) {
+        *split_ts_out = best_split != sv->len
+                            ? best_split_ts
+                            : get_bucket_ts(set->etypr->getExpiry(pv_get(sv, sv->len - 1)));
+    }
+
+    return best_split;
 }
 
 
@@ -524,33 +571,9 @@ hashtableType pointerHashtableType = {
     .hashFunction = hash_pointer,
 };
 
-static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
-    long long bucket_ts = (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MAX;
-    long long be_ts = htonu64(bucket_ts);
-    size_t size = sizeof(be_ts);
-    memcpy(key, &be_ts, size);
-    return size;
-}
-
-static inline size_t encodeExpiryKey(long long expiry, unsigned char *key) {
-    long long be_ts = htonu64(expiry);
-    size_t size = sizeof(be_ts);
-    memcpy(key, &be_ts, size);
-    return size;
-}
-
-static inline long long decodeExpiryKey(unsigned char *key) {
-    long long res;
-    memcpy(&res, key, sizeof(res));
-    res = ntohu64(res);
-    return res;
-}
-
-
 static inline vsetBucket *findBucket(volatile_set *set, long long expiry, unsigned char *key, size_t *key_len, long long *pbucket_ts, raxNode **node) {
     *key_len = encodeExpiryKey(expiry, key);
     vsetBucket *bucket = NULL;
-
     /* First try to locate the first bucket which is larger than the specified key */
     raxIterator iter;
     raxStart(&iter, set->expiry_buckets);
@@ -559,7 +582,7 @@ static inline vsetBucket *findBucket(volatile_set *set, long long expiry, unsign
     if (raxNext(&iter)) {
         long long bucket_ts = decodeExpiryKey(iter.key);
         /* If this bucket span over a window to far in the future, it is not a candidate. */
-        if ((bucket_ts - expiry) > VOLATILESET_BUCKET_INTERVAL_MAX)
+        if (get_max_bucket_ts(expiry) < bucket_ts)
             return NULL;
         bucket = iter.data;
         assert(iter.node->iskey);
@@ -597,6 +620,7 @@ static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long lo
     } else if (min_bucket_ts != max_bucket_ts) {
         /* lets split the bucket. we know we can do it. */
         uint32_t split_index = _find_split_position(set, bucket, &target_bucket_ts);
+        assert(target_bucket_ts < bucket_ts);
         assert(split_index != pv_len(sv)); /* no way to split it ???  */
         pointer_vector *new_bucket_vector = vsetBucketVector(bucket);
         bucket = vsetBucketSetVector(bucket, pv_split(&new_bucket_vector, split_index));
@@ -608,6 +632,28 @@ static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long lo
         /* In order to avoid rax override, we directly change the node data */
         // alternative: raxInsert(set->expiry_buckets, key, key_len, bucket, NULL);
         raxSetData(node, bucket);
+
+        /* santity check after split
+        assert(target_bucket_ts < bucket_ts);
+        pointer_vector *high_bucket_vector = vsetBucketVector(bucket);
+        pointer_vector *low_bucket_vector = vsetBucketVector(new_bucket);
+        for (uint32_t i = 0; i < pv_len(low_bucket_vector); i++) {
+            assert(set->etypr->getExpiry(pv_get(low_bucket_vector, i)) < target_bucket_ts);
+            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(low_bucket_vector, i))) < bucket_ts);
+            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(low_bucket_vector, i))) <= target_bucket_ts);
+            long long find_bucket_ts;
+            vsetBucket *find_bucket = findBucket(set, set->etypr->getExpiry(pv_get(low_bucket_vector, i)), key, &key_len, &find_bucket_ts, NULL);
+            assert(find_bucket == new_bucket);
+        }
+        for (uint32_t i = 0; i < pv_len(high_bucket_vector); i++) {
+            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(high_bucket_vector, i))) > target_bucket_ts);
+            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(high_bucket_vector, i))) <= bucket_ts);
+            assert(set->etypr->getExpiry(pv_get(high_bucket_vector, i)) >= target_bucket_ts);
+            assert(set->etypr->getExpiry(pv_get(high_bucket_vector, i)) < bucket_ts);
+            long long find_bucket_ts;
+            vsetBucket *find_bucket = findBucket(set, set->etypr->getExpiry(pv_get(high_bucket_vector, i)), key, &key_len, &find_bucket_ts, NULL);
+            assert(find_bucket == bucket);
+        }*/
     } else {
         /* We cannot split the bucket. just return false */
         return false;
@@ -685,7 +731,7 @@ int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
         if (pv_len(sv) == 127) {
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(set, bucket, bucket_ts, node)) {
-                // Upgrade to hashtable
+                //  Upgrade to hashtable
                 hashtable *ht = hashtableCreate(&pointerHashtableType);
                 pointer_vector *sv = vsetBucketVector(bucket);
                 for (uint32_t i = 0; i < pv_len(sv); i++) {
@@ -777,6 +823,7 @@ static int volatileSetRemoveEntryFromBucket(volatile_set *set, void *entry, vset
     }
     return 1;
 }
+
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     long long bucket_ts;
@@ -792,37 +839,34 @@ int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, 
         return 1;
 
     if (old_entry && old_expiry != -1)
-        volatileSetRemoveEntry(set, old_entry, old_expiry);
+        assert((volatileSetRemoveEntry(set, old_entry, old_expiry)));
 
     if (new_entry && new_expiry != -1)
-        volatileSetAddEntry(set, new_entry, new_expiry);
+        assert(volatileSetAddEntry(set, new_entry, new_expiry));
 
     return 1;
 }
 
-int volatileSetExpireEntry(volatile_set *set, volatileSetIterator *it, mstime_t now, void *serverDb, void *o) {
-    vsetBucket *bucket = it->bucket.data;
-    raxNode *node = it->bucket.node;
-    /* check if we reached a bucket which end time is in the future */
-    if (it->bucket_ts > now)
-        return 0;
-
-    assert(volatileSetRemoveEntryFromBucket(set, it->entry, bucket, it->bucket.key, it->bucket.key_len, &bucket, node));
-
-    /* call expire on the entry */
-    if (set->etypr->expire) {
-        set->etypr->expire(serverDb, o, it->entry);
+static void *volatileSetGetFirstExpired(volatile_set *set, mstime_t now, bool delete) {
+    volatileSetIterator it;
+    void *entry = NULL;
+    volatileSetStart(set, &it);
+    if (volatileSetNext(&it, NULL) && (it.bucket_ts <= now)) {
+        entry = it.entry;
+        if (delete)
+            volatileSetRemoveEntryFromBucket(set, entry, it.bucket.data, it.bucket.key, it.bucket.key_len, NULL, it.bucket.node);
     }
+    volatileSetReset(&it);
 
-    /* Must reposition the iterator after deletion */
-    if (!bucket) {
-        raxSeek(&it->bucket, "^", NULL, 0);
-        it->iteration_state = VSET_BUCKET_NONE;
-    } else {
-        it->bucket.data = bucket;
-        it->iteration_state = vsetBucketType(bucket);
-    }
-    return 1;
+    return entry;
+}
+
+void *volatileSetdPopExpired(volatile_set *set, mstime_t now) {
+    return volatileSetGetFirstExpired(set, now, true);
+}
+
+void *volatileSetFirstExpired(volatile_set *set, mstime_t now) {
+    return volatileSetGetFirstExpired(set, now, false);
 }
 
 int volatileSetNext(volatileSetIterator *it, void **entryptr) {
@@ -860,7 +904,7 @@ int volatileSetNext(volatileSetIterator *it, void **entryptr) {
     case VSET_BUCKET_HT: {
         hashtable *ht = vsetBucketHashtable(bucket);
         if (init_bucket_scan)
-            hashtableInitIterator(&it->hiter, ht, HASHTABLE_ITER_SAFE);
+            hashtableInitIterator(&it->hiter, ht, 0);
         if (!hashtableNext(&it->hiter, &it->entry)) {
             hashtableResetIterator(&it->hiter);
             it->iteration_state = VSET_BUCKET_NONE;
@@ -882,7 +926,5 @@ void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
 }
 
 void volatileSetReset(volatileSetIterator *it) {
-    if (it->iteration_state == VSET_BUCKET_HT)
-        hashtableResetIterator(&it->hiter);
     raxStop(&it->bucket);
 }
