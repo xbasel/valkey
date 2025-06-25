@@ -48,7 +48,7 @@ int hashTypeExpireEntry(void *db, void *o, void *entry);
 volatileEntryType hashVolatileEntryType = {
     .entryGetKey = (sds(*)(const void *entry))entryGetField,
     .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
-    .expire =  (int (*)(void *db, void *o, void *entry))hashTypeExpireEntry
+    .expire = (int (*)(void *db, void *o, void *entry))hashTypeExpireEntry,
 };
 
 /*-----------------------------------------------------------------------------

@@ -329,15 +329,17 @@ uint32_t pv_find(pointer_vector *sv, void *elem) {
 /*************************************************************************************************************
  *                                pointer_vector End
  *************************************************************************************************************/
-#define VSET_BUCKET_NONE -1  // matching the NULL case
-#define VSET_BUCKET_SINGLE 1 // x1 (assuming sds)
-#define VSET_BUCKET_VECTOR 0 // 00 (non-null pointer)
-#define VSET_BUCKET_HT 2     // 10
+#define VSET_BUCKET_NONE -1       // matching the NULL case
+#define VSET_BUCKET_SINGLE 0x1ULL // xx1 (assuming sds)
+#define VSET_BUCKET_VECTOR 0x2ULL // 010
+#define VSET_BUCKET_HT 0x4ULL     // 100
+#define VSET_BUCKET_RAX 0x6ULL    // 110
+
 
 // TODO() We can probably embed the type in the data pointer thus save the unaligned access to the data and
 // save some more bytes.
 
-#define VSET_TAG_MASK 0x3ULL
+#define VSET_TAG_MASK 0x7ULL
 #define VSET_PTR_MASK (~VSET_TAG_MASK)
 
 // Generic bucket type
@@ -350,9 +352,7 @@ static inline int vsetBucketType(vsetBucket *b) {
     uintptr_t bits = (uintptr_t)b;
     if (bits & 0x1)
         return VSET_BUCKET_SINGLE;
-    if (bits & 0x2)
-        return VSET_BUCKET_HT;
-    return VSET_BUCKET_VECTOR;
+    return bits & VSET_TAG_MASK;
 }
 
 // Access raw pointer
@@ -369,6 +369,11 @@ static inline pointer_vector *vsetBucketVector(vsetBucket *b) {
 static inline hashtable *vsetBucketHashtable(vsetBucket *b) {
     assert(vsetBucketType(b) == VSET_BUCKET_HT);
     return (hashtable *)vsetBucketRawPtr(b);
+}
+
+static inline rax *vsetBucketRax(vsetBucket *b) {
+    assert(vsetBucketType(b) == VSET_BUCKET_RAX);
+    return (rax *)vsetBucketRawPtr(b);
 }
 
 static inline void *vsetBucketSingle(vsetBucket *b) {
@@ -395,6 +400,16 @@ static inline vsetBucket *vsetBucketSetHashtable(vsetBucket *b, hashtable *ht) {
 static inline vsetBucket *vsetBucketSetSingle(vsetBucket *b, void *ptr) {
     UNUSED(b);
     return ptr;
+}
+
+static inline vsetBucket *vsetBucketSetNone(vsetBucket *b) {
+    UNUSED(b);
+    return NULL;
+}
+
+static inline vsetBucket *vsetBucketSetRax(vsetBucket *b, rax *r) {
+    UNUSED(b);
+    return vsetBucketSetType(r, VSET_BUCKET_RAX);
 }
 
 /****************** Helper Functions *******************************************/
@@ -441,11 +456,10 @@ static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
  * elem Pointer to the element to insert
  * cmp Comparison function (like strcmp-style: <0, ==0, >0)
  * returns the insertion index (between 0 and sv->len) */
-uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, void *entry) {
+uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, long long expiry) {
     pointer_vector *sv = vsetBucketVector(bucket);
     uint32_t left = 0;
     uint32_t right = pv_len(sv);
-    long long expiry = set->etypr->getExpiry(entry);
     while (left < right) {
         uint32_t mid = (left + right) / 2;
         int res = EXPIRE_COMPARE(expiry, set->etypr->getExpiry(sv->data[mid]));
@@ -597,6 +611,23 @@ static inline vsetBucket *findBucket(volatile_set *set, long long expiry, unsign
     return bucket;
 }
 
+static void freeVsetBucket(void *entry) {
+    vsetBucket *bucket = (vsetBucket *)entry;
+    switch (vsetBucketType(bucket)) {
+    case VSET_BUCKET_SINGLE:
+        // No internal memory to free
+        break;
+    case VSET_BUCKET_VECTOR:
+        pv_free(vsetBucketVector(bucket));
+        break;
+    case VSET_BUCKET_HT:
+        hashtableRelease(vsetBucketHashtable(bucket));
+        break;
+    default:
+        serverPanic("Unknown volatile set type in freeVsetBucket");
+    }
+}
+
 static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long long bucket_ts, raxNode *node) {
     /* We can only split vector encoded buckets */
     if (vsetBucketType(bucket) != VSET_BUCKET_VECTOR) {
@@ -664,143 +695,164 @@ static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long lo
     return true;
 }
 
-volatile_set *createVolatileSet(volatileEntryType *type) {
-    volatile_set *set = zmalloc(sizeof(volatile_set));
-    set->etypr = type;
-    set->expiry_buckets = raxNew();
-    return set;
+static inline vsetBucket *insertToBucket_NONE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+    UNUSED(set);
+    UNUSED(expiry);
+    return vsetBucketSetSingle(bucket, entry);
 }
 
-static void freeVsetBucket(void *entry) {
-    vsetBucket *bucket = (vsetBucket *)entry;
-    switch (vsetBucketType(bucket)) {
-    case VSET_BUCKET_SINGLE:
-        // No internal memory to free
-        break;
-    case VSET_BUCKET_VECTOR:
-        pv_free(vsetBucketVector(bucket));
-        break;
-    case VSET_BUCKET_HT:
-        hashtableRelease(vsetBucketHashtable(bucket));
-        break;
-    default:
-        serverPanic("Unknown volatile set type in freeVsetBucket");
+static inline vsetBucket *insertToBucket_SINGLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+    /* Upgrade to vector */
+    pointer_vector *sv = pv_new(2);
+    void *curr_entry = vsetBucketSingle(bucket);
+    long long curr_expiry = set->etypr->getExpiry(curr_entry);
+    if (curr_expiry < expiry) {
+        sv = pv_insert(sv, curr_entry, 0);
+        sv = pv_insert(sv, entry, 1);
+    } else {
+        sv = pv_insert(sv, entry, 0);
+        sv = pv_insert(sv, curr_entry, 1);
     }
+    bucket = vsetBucketSetVector(bucket, sv);
+    return bucket;
 }
 
-void freeVolatileSet(volatile_set *b) {
-    if (!b) return;
-    raxFreeWithCallback(b->expiry_buckets, freeVsetBucket);
-    zfree(b);
+static inline vsetBucket *insertToBucket_VECTOR(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+    pointer_vector *pv = vsetBucketVector(bucket);
+    /* limit of the number of elements in a vector. */
+    if (pv_len(pv) >= VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
+        //  Upgrade to hashtable
+        hashtable *ht = hashtableCreate(&pointerHashtableType);
+        pointer_vector *sv = vsetBucketVector(bucket);
+        for (uint32_t i = 0; i < pv_len(sv); i++) {
+            hashtableAdd(ht, pv_get(sv, i));
+        }
+        pv_free(sv);
+        /* Add the new entry as well */
+        hashtableAdd(ht, entry);
+
+        return vsetBucketSetHashtable(bucket, ht);
+    } else {
+        uint32_t pos = _find_insert_position(set, bucket, expiry);
+        return vsetBucketSetVector(bucket, pv_insert(pv, entry, pos));
+    }
+    return NULL;
 }
 
-bool volatileSetIsEmpty(volatile_set *set) {
-    return raxSize(set->expiry_buckets) == 0;
+static inline vsetBucket *insertToBucket_HASHTABLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+    UNUSED(set);
+    UNUSED(expiry);
+
+    hashtable *ht = vsetBucketHashtable(bucket);
+    assert(hashtableAdd(ht, entry));
+    return bucket;
 }
 
-int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_RAX(volatile_set *set, vsetBucket *target, void *entry, long long expiry) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     size_t key_len;
     long long bucket_ts;
+    rax *expiry_buckets = vsetBucketRax(target);
     raxNode *node;
     vsetBucket *bucket = findBucket(set, expiry, key, &key_len, &bucket_ts, &node);
-    if (!bucket) {
+    int type = vsetBucketType(bucket);
+    if (type == VSET_BUCKET_NONE) {
         /* No bucket: create single-entry bucket */
+        bucket = insertToBucket_NONE(set, bucket, entry, expiry);
+        assert(vsetBucketType(bucket) == VSET_BUCKET_SINGLE);
         size_t key_size = encodeNewExpiryBucketKey(key, expiry);
-        bucket = vsetBucketSetSingle(bucket, entry);
-        raxInsert(set->expiry_buckets, key, key_size, bucket, NULL);
-        return 1;
-    } else if (vsetBucketType(bucket) == VSET_BUCKET_SINGLE) {
+        raxInsert(expiry_buckets, key, key_size, bucket, NULL);
+        return target;
+    } else if (type == VSET_BUCKET_SINGLE) {
         /* Upgrade to vector */
-        pointer_vector *sv = pv_new(2);
-        void *curr_entry = vsetBucketSingle(bucket);
-        long long curr_expiry = set->etypr->getExpiry(curr_entry);
-        if (curr_expiry < expiry) {
-            sv = pv_insert(sv, curr_entry, 0);
-            sv = pv_insert(sv, entry, 1);
-        } else {
-            sv = pv_insert(sv, entry, 0);
-            sv = pv_insert(sv, curr_entry, 1);
-        }
-        bucket = vsetBucketSetVector(bucket, sv);
+        bucket = insertToBucket_SINGLE(set, bucket, entry, expiry);
+        assert(vsetBucketType(bucket) == VSET_BUCKET_VECTOR);
         /* In order to avoid rax override, we directly change the node data */
-        // alternative: raxInsert(set->expiry_buckets, key, key_len, bucket, NULL);
+        // alternative: raxInsert(expiry_buckets, key, key_len, bucket, NULL);
         raxSetData(node, bucket);
-    } else if (vsetBucketType(bucket) == VSET_BUCKET_VECTOR) {
+    } else if (type == VSET_BUCKET_VECTOR) {
         pointer_vector *sv = vsetBucketVector(bucket);
-        if (pv_len(sv) == 127) {
+        if (pv_len(sv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(set, bucket, bucket_ts, node)) {
-                //  Upgrade to hashtable
-                hashtable *ht = hashtableCreate(&pointerHashtableType);
-                pointer_vector *sv = vsetBucketVector(bucket);
-                for (uint32_t i = 0; i < pv_len(sv); i++) {
-                    hashtableAdd(ht, pv_get(sv, i));
-                }
-                pv_free(sv);
-                /* Add the new entry as well */
-                hashtableAdd(ht, entry);
-
-                bucket = vsetBucketSetHashtable(bucket, ht);
+                /* Can't split? insrt to the vector anyway, it will just expand to hashtable */
+                bucket = insertToBucket_VECTOR(set, bucket, entry, expiry);
+                assert(vsetBucketType(bucket) == VSET_BUCKET_HT);
                 /* In order to avoid rax override, we directly change the node data */
-                // alternative raxInsert(set->expiry_buckets, key, key_len, bucket, NULL);
+                // alternative raxInsert(expiry_buckets, key, key_len, bucket, NULL);
                 raxSetData(node, bucket);
             } else {
                 /* we splitted the bucket. go and find again a bucket to place the entry since there can be new options now. */
-                volatileSetAddEntry(set, entry, expiry);
+                return insertToBucket_RAX(set, target, entry, expiry);
             }
         } else {
-            uint32_t pos = _find_insert_position(set, bucket, entry);
-            vsetBucket *new_bucket = vsetBucketSetVector(bucket, pv_insert(sv, entry, pos));
+            vsetBucket *new_bucket = insertToBucket_VECTOR(set, bucket, entry, expiry);
             if (new_bucket != bucket)
                 /* In order to avoid rax override, we directly change the node data */
-                // alternative: raxInsert(set->expiry_buckets, key, key_len, new_bucket, NULL);
+                // alternative: raxInsert(expiry_buckets, key, key_len, new_bucket, NULL);
                 raxSetData(node, new_bucket);
         }
     } else if (vsetBucketType(bucket) == VSET_BUCKET_HT) {
-        hashtable *ht = vsetBucketHashtable(bucket);
-        assert(hashtableAdd(ht, entry));
+        bucket = insertToBucket_HASHTABLE(set, bucket, entry, expiry);
     } else {
-        serverPanic("Unknown bucket type in volatileSetAddEntry");
+        serverPanic("Unknown bucket type in insertToBucket_RAX");
     }
-    return 1;
+    return target;
 }
 
-static int volatileSetRemoveEntryFromBucket(volatile_set *set, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
-    switch (vsetBucketType(bucket)) {
-    case VSET_BUCKET_SINGLE:
-        if (vsetBucketSingle(bucket) != entry) return 0;
-        raxRemove(set->expiry_buckets, key, key_len, NULL);
-        if (pbucket) *pbucket = NULL;
-        break;
-    case VSET_BUCKET_VECTOR: {
-        vsetBucket *new_bucket;
-        pointer_vector *sv = vsetBucketVector(bucket);
-        /* In case we we removed the entry */
-        if (pv_remove(&sv, entry)) {
-            if (pv_len(sv) == 1) {
-                /* convert to single if needed */
-                new_bucket = vsetBucketSetSingle(bucket, pv_get(sv, 0));
-                pv_free(sv);
-            } else if (pv_len(sv) == 0) {
-                raxRemove(set->expiry_buckets, key, key_len, NULL);
-                if (pbucket) *pbucket = NULL;
-                break;
-            } else {
-                new_bucket = vsetBucketSetVector(bucket, sv);
-            }
-            // if (new_bucket != bucket)
-            /* In order to avoid rax override, we directly change the node data */
-            // alternative: raxInsert(set->expiry_buckets, key, key_len, new_bucket, NULL);
-            raxSetData(node, new_bucket);
-            if (pbucket) *pbucket = new_bucket;
-        } else
-            return 0;
-        break;
+static inline vsetBucket *removeFromBucket_SINGLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+    UNUSED(set);
+    UNUSED(expiry);
+
+    if (vsetBucketSingle(bucket) == entry) {
+        *removed = true;
+        return vsetBucketSetNone(bucket);
+    } else {
+        *removed = false;
+        return bucket;
     }
-    case VSET_BUCKET_HT: {
-        hashtable *ht = vsetBucketHashtable(bucket);
-        if (!hashtableDelete(ht, entry)) return 0;
+}
+
+static inline vsetBucket *removeFromBucket_VECTOR(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+    UNUSED(set);
+    UNUSED(expiry);
+
+    vsetBucket *new_bucket = bucket;
+    bool success = false;
+    pointer_vector *sv = vsetBucketVector(bucket);
+    /* In case we we removed the entry */
+    uint32_t vlen = pv_len(sv);
+    if (vlen <= 2) {
+        /* convert to single if needed */
+        uint32_t idx = pv_find(sv, entry);
+        if (idx == vlen) {
+            success = false;
+        } else {
+            if (vlen == 1)
+                new_bucket = vsetBucketSetNone(bucket);
+            else
+                new_bucket = vsetBucketSetSingle(bucket, pv_get(sv, idx == 0 ? 1 : 0));
+            success = true;
+            pv_free(sv);
+        }
+    } else {
+        if (pv_remove(&sv, entry)) {
+            success = true;
+            new_bucket = vsetBucketSetVector(bucket, sv);
+        }
+    }
+    if (removed) *removed = success;
+    return new_bucket;
+}
+
+static inline vsetBucket *removeFromBucket_HASHTABLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+    UNUSED(set);
+    UNUSED(expiry);
+
+    bool success = false;
+    vsetBucket *new_bucket = bucket;
+    hashtable *ht = vsetBucketHashtable(bucket);
+    if (hashtableDelete(ht, entry)) {
         assert(hashtableSize(ht) > 0);
         if (hashtableSize(ht) == 1) {
             // Downgrade to SINGLE
@@ -809,29 +861,77 @@ static int volatileSetRemoveEntryFromBucket(volatile_set *set, void *entry, vset
             void *ptr;
             hashtableNext(&hi, &ptr);
             hashtableRelease(ht);
-            bucket = vsetBucketSetSingle(bucket, ptr);
+            new_bucket = vsetBucketSetSingle(bucket, ptr);
+        }
+    }
+    if (removed) *removed = success;
+    return new_bucket;
+}
+
+static bool raxBucketRemoveEntry(volatile_set *set, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
+    bool removed = false;
+    switch (vsetBucketType(bucket)) {
+    case VSET_BUCKET_SINGLE:
+        bucket = removeFromBucket_SINGLE(set, bucket, entry, 0, &removed);
+        assert(vsetBucketType(bucket) == VSET_BUCKET_NONE);
+        if (removed)
+            raxRemove(set->expiry_buckets, key, key_len, NULL);
+        if (pbucket) *pbucket = NULL;
+        break;
+    case VSET_BUCKET_VECTOR: {
+        vsetBucket *new_bucket = removeFromBucket_VECTOR(set, bucket, entry, 0, &removed);
+        if (new_bucket != bucket)
+            /* In order to avoid rax override, we directly change the node data */
+            // alternative: raxInsert(set->expiry_buckets, key, key_len, new_bucket, NULL);
+            raxSetData(node, new_bucket);
+        if (pbucket) *pbucket = new_bucket;
+        break;
+    }
+    case VSET_BUCKET_HT: {
+        vsetBucket *new_bucket = removeFromBucket_HASHTABLE(set, bucket, entry, 0, &removed);
+        if (new_bucket != bucket)
             /* In order to avoid rax override, we directly change the node data */
             // alternative: raxInsert(set->expiry_buckets, key, key_len, bucket, NULL);
             raxSetData(node, bucket);
-        }
-        if (pbucket) *pbucket = bucket;
+
+        if (pbucket) *pbucket = new_bucket;
         break;
     }
     default:
-        serverPanic("Unknown bucket type in volatileSetRemoveEntry");
-        return 0;
+        serverPanic("Unknown bucket type for raxBucketRemoveEntry");
+        return false;
     }
-    return 1;
+    return removed;
 }
 
-int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
+static inline vsetBucket *removeFromBucket_RAX(volatile_set *set, vsetBucket *target, void *entry, long long expiry, bool *removed) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     long long bucket_ts;
     size_t key_len;
     raxNode *node;
     vsetBucket *bucket = findBucket(set, expiry, key, &key_len, &bucket_ts, &node);
     assert(bucket);
-    return volatileSetRemoveEntryFromBucket(set, entry, bucket, key, key_len, NULL, node);
+    bool success = raxBucketRemoveEntry(set, entry, bucket, key, key_len, NULL, node);
+    if (removed) *removed = success;
+    // TODO - shrink to single bucket if possible
+    return target;
+}
+
+
+int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
+    vsetBucket *bucket = NULL;
+    bucket = vsetBucketSetRax(bucket, set->expiry_buckets);
+    assert(bucket == insertToBucket_RAX(set, bucket, entry, expiry));
+    return 1;
+}
+
+int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
+    bool removed;
+    vsetBucket *bucket = NULL;
+    bucket = vsetBucketSetRax(bucket, set->expiry_buckets);
+    bucket = removeFromBucket_RAX(set, bucket, entry, expiry, &removed);
+    assert(vsetBucketRax(bucket) == set->expiry_buckets);
+    return removed ? 1 : 0;
 }
 
 int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
@@ -854,7 +954,7 @@ static void *volatileSetGetFirstExpired(volatile_set *set, mstime_t now, bool de
     if (volatileSetNext(&it, NULL) && (it.bucket_ts <= now)) {
         entry = it.entry;
         if (delete)
-            volatileSetRemoveEntryFromBucket(set, entry, it.bucket.data, it.bucket.key, it.bucket.key_len, NULL, it.bucket.node);
+            assert(raxBucketRemoveEntry(set, entry, it.bucket.data, it.bucket.key, it.bucket.key_len, NULL, it.bucket.node));
     }
     volatileSetReset(&it);
 
@@ -927,4 +1027,21 @@ void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
 
 void volatileSetReset(volatileSetIterator *it) {
     raxStop(&it->bucket);
+}
+
+volatile_set *createVolatileSet(volatileEntryType *type) {
+    volatile_set *set = zmalloc(sizeof(volatile_set));
+    set->etypr = type;
+    set->expiry_buckets = raxNew();
+    return set;
+}
+
+void freeVolatileSet(volatile_set *b) {
+    if (!b) return;
+    raxFreeWithCallback(b->expiry_buckets, freeVsetBucket);
+    zfree(b);
+}
+
+bool volatileSetIsEmpty(volatile_set *set) {
+    return raxSize(set->expiry_buckets) == 0;
 }

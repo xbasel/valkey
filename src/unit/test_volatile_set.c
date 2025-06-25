@@ -206,8 +206,8 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
 
 /********************* Fuzzer tests ********************************/
 
-#define NUM_ITERATIONS 10000
-#define MAX_ENTRIES 1000
+#define NUM_ITERATIONS 1000000
+#define MAX_ENTRIES 100000
 
 /* Global array to simulate a test database */
 mock_entry *mock_entries[MAX_ENTRIES];
