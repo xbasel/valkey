@@ -108,7 +108,7 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
     volatile_set *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
     serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
-    if (volatileSetNumEntries(set) == 0) {
+    if (volatileSetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
 }
@@ -132,7 +132,7 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
         debugServerAssert(set);
         serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }
-    if (volatileSetNumEntries(set) == 0) {
+    if (volatileSetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
 }
