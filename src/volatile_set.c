@@ -663,32 +663,11 @@ static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long lo
         // alternative: raxInsert(set->expiry_buckets, key, key_len, bucket, NULL);
         raxSetData(node, bucket);
 
-        /* santity check after split
-        assert(target_bucket_ts < bucket_ts);
-        pointer_vector *high_bucket_vector = vsetBucketVector(bucket);
-        pointer_vector *low_bucket_vector = vsetBucketVector(new_bucket);
-        for (uint32_t i = 0; i < pv_len(low_bucket_vector); i++) {
-            assert(set->etypr->getExpiry(pv_get(low_bucket_vector, i)) < target_bucket_ts);
-            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(low_bucket_vector, i))) < bucket_ts);
-            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(low_bucket_vector, i))) <= target_bucket_ts);
-            long long find_bucket_ts;
-            vsetBucket *find_bucket = findBucket(set, set->etypr->getExpiry(pv_get(low_bucket_vector, i)), key, &key_len, &find_bucket_ts, NULL);
-            assert(find_bucket == new_bucket);
-        }
-        for (uint32_t i = 0; i < pv_len(high_bucket_vector); i++) {
-            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(high_bucket_vector, i))) > target_bucket_ts);
-            assert(get_bucket_ts(set->etypr->getExpiry(pv_get(high_bucket_vector, i))) <= bucket_ts);
-            assert(set->etypr->getExpiry(pv_get(high_bucket_vector, i)) >= target_bucket_ts);
-            assert(set->etypr->getExpiry(pv_get(high_bucket_vector, i)) < bucket_ts);
-            long long find_bucket_ts;
-            vsetBucket *find_bucket = findBucket(set, set->etypr->getExpiry(pv_get(high_bucket_vector, i)), key, &key_len, &find_bucket_ts, NULL);
-            assert(find_bucket == bucket);
-        }*/
     } else {
         /* We cannot split the bucket. just return false */
         return false;
     }
-    /* We change the current bucket position OR we splited it, either way we have a new bucket to insert. */
+    /* We change the current bucket position OR we split it, either way we have a new bucket to insert. */
     key_len = encodeExpiryKey(target_bucket_ts, key);
     raxInsert(expiry_buckets, key, key_len, new_bucket, NULL);
     return true;
@@ -780,7 +759,7 @@ static inline vsetBucket *insertToBucket_RAX(volatile_set *set, vsetBucket *targ
                 // alternative raxInsert(expiry_buckets, key, key_len, bucket, NULL);
                 raxSetData(node, bucket);
             } else {
-                /* we splitted the bucket. go and find again a bucket to place the entry since there can be new options now. */
+                /* we split the bucket. go and find again a bucket to place the entry since there can be new options now. */
                 return insertToBucket_RAX(set, target, entry, expiry);
             }
         } else {
