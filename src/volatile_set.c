@@ -261,7 +261,7 @@ pointer_vector *pv_removeAt(pointer_vector *sv, uint32_t idx) {
         /* Last element being removed; delete vector */
         zfree(sv);
         return NULL;
-    } else if (idx < sv->len - 1)
+    } else if (idx < sv->len - 1UL)
         memmove(&sv->data[idx], &sv->data[idx + 1], (sv->len - idx - 1) * PV_ELEM_SIZE);
     sv->len--;
     return pv_shrink_to_fit(sv);
