@@ -329,13 +329,13 @@ uint32_t pv_find(pointer_vector *sv, void *elem) {
 /*************************************************************************************************************
  *                                pointer_vector End
  *************************************************************************************************************/
-#define VSET_BUCKET_NONE -1       // matching the NULL case
-#define VSET_BUCKET_SINGLE 0x1ULL // xx1 (assuming sds)
-#define VSET_BUCKET_VECTOR 0x2ULL // 010
-#define VSET_BUCKET_HT 0x4ULL     // 100
-#define VSET_BUCKET_RAX 0x6ULL    // 110
+#define VSET_BUCKET_NONE -1      // matching the NULL case
+#define VSET_BUCKET_SINGLE 0x1UL // xx1 (assuming sds)
+#define VSET_BUCKET_VECTOR 0x2UL // 010
+#define VSET_BUCKET_HT 0x4UL     // 100
+#define VSET_BUCKET_RAX 0x6UL    // 110
 
-#define VSET_TAG_MASK 0x7ULL
+#define VSET_TAG_MASK 0x7UL
 #define VSET_PTR_MASK (~VSET_TAG_MASK)
 
 // Determine bucket type
@@ -555,21 +555,22 @@ uint32_t _find_split_position(volatile_set *set, vsetBucket *bucket, long long *
 
 static uint64_t hash_pointer(const void *ptr) {
     uintptr_t x = (uintptr_t)ptr;
-    if (sizeof(ptr) == 4) {
-        // 32-bit platform
-        x ^= x >> 16;
-        x *= 0x85ebca6b;
-        x ^= x >> 13;
-        x *= 0xc2b2ae35;
-        x ^= x >> 16;
-    } else {
-        // 64-bit platform
-        x ^= x >> 33;
-        x *= 0xff51afd7ed558ccdULL;
-        x ^= x >> 33;
-        x *= 0xc4ceb9fe1a85ec53ULL;
-        x ^= x >> 33;
-    }
+#if UINTPTR_MAX == 0xFFFFFFFF
+    // 32-bit platform
+    x ^= x >> 16;
+    x *= 0x85ebca6b;
+    x ^= x >> 13;
+    x *= 0xc2b2ae35;
+    x ^= x >> 16;
+
+#else
+    // 64-bit platform
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+#endif
     return (uint64_t)x;
 }
 
