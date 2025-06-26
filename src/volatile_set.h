@@ -10,182 +10,189 @@
 #include "sds.h"
 #include "monotonic.h" /* for mstime_t*/
 
-/*-----------------------------------------------------------------------------
- * Volatile Set - Time-Bucketed Entry Set
+/*
+ *-----------------------------------------------------------------------------
+ * Volatile Set - Adaptive, Expiry-aware Set Structure
+ *-----------------------------------------------------------------------------
  *
- * The `volatile_set` data structure provides an efficient, time-aware mechanism
- * to track and expire entries based on UNIX timestamps. It is optimized for
- * memory efficiency and fast iteration, particularly for use cases where
- * entries have short-lived expirations in the order of milliseconds.
+ * The `volatile_set` is a dynamic, memory-efficient container for managing
+ * entries with expiry semantics. It is designed to efficiently track entries
+ * that expire at varying times and scales to large sets by adapting its internal
+ * representation as it grows or shrinks.
  *
- * --------------------------------------------------------------------------
- * Overview
- * --------------------------------------------------------------------------
- * The core of the structure is a radix tree (`rax`) where each key represents
- * the end timestamp of a fixed-duration time window (a "bucket"). The value
- * stored for each rax entry is a tagged pointer identifying the type of the
- * bucket and its storage container.
+ *-----------------------------------------------------------------------------
+ * Expiry Buckets and Pointer Tagging
+ *-----------------------------------------------------------------------------
  *
- * Time windows are grouped in variable resolutions:
- *  - Minimum window: VOLATILESET_BUCKET_INTERVAL_MIN (16 milliseconds)
- *  - Maximum window: VOLATILESET_BUCKET_INTERVAL_MAX (8192 milliseconds)
- * The actual granularity used to group entries is defined by
- * VOLATILESET_BUCKET_GRANULARITY.
+ * Internally, the `volatile_set` maintains a single `vsetBucket*` pointer,
+ * which can point to different types of buckets depending on the number of
+ * entries and the needed resolution. The pointer is tagged using the lowest 3 bits:
  *
- * --------------------------------------------------------------------------
- * Entry Pointer Requirements
- * --------------------------------------------------------------------------
- * Entries added to a `volatile_set` must be memory pointers with the least
- * significant bit (LSB) set — that is, *odd-addressed pointers*. This is
- * necessary for internal tagging logic. Common use cases, like `sds`, already
- * meet this requirement.
+ *     #define VSET_BUCKET_NONE   -1
+ *     #define VSET_BUCKET_SINGLE 0x1ULL  // pointer to single entry (odd ptr)
+ *     #define VSET_BUCKET_VECTOR 0x2ULL  // pointer to pointer vector
+ *     #define VSET_BUCKET_HT     0x4ULL  // pointer to hashtable
+ *     #define VSET_BUCKET_RAX    0x6ULL  // pointer to radix tree
  *
- * --------------------------------------------------------------------------
- * Bucket Types
- * --------------------------------------------------------------------------
- * Buckets in the rax are implemented as tagged pointers supporting one of the
- * following types:
+ *     #define VSET_TAG_MASK      0x7ULL
+ *     #define VSET_PTR_MASK      (~VSET_TAG_MASK)
  *
- * 1. SINGLE  (Tag: xx1)
- *    - Stores a single entry directly in the rax value.
- *    - Used when there is only one element in a time bucket.
+ * IMPORTANT!!!! - All entries must have LSB set (i.e., be odd-aligned) to be compatible with !!!!
+ * tagging constraints.
  *
- * 2. VECTOR  (Tag: x00)
- *    - Stores a pointer to a `pointer_vector` (memory-efficient dynamic array).
- *    - Used when multiple entries fall within the same bucket window.
- *    - Efficient for small bucket sizes (up to ~127 entries).
- *    - Maintains entries in sorted order by expiry using binary search for insertions.
+ *-----------------------------------------------------------------------------
+ * Time Bucket Management
+ *-----------------------------------------------------------------------------
  *
- * 3. HASHTABLE (Tag: x10)
- *    - Stores a pointer to a hashtable of entries.
- *    - Used when a vector overflows or entries cannot be further split due to
- *      coarse timestamp resolution.
- *    - Supports fast random lookup and deletion.
+ * Entries are grouped into **time buckets** based on their expiry time.
+ * Each time bucket represents a window aligned to:
  *
- * 4. NONE (Tag: NULL)
- *    - Represents an uninitialized or cleared bucket.
+ *     #define VOLATILESET_BUCKET_INTERVAL_MIN  (1 << 4)  // 16ms
+ *     #define VOLATILESET_BUCKET_INTERVAL_MAX  (1 << 13) // 8192ms
  *
- * --------------------------------------------------------------------------
- * Bucket Resolution and Organization
- * --------------------------------------------------------------------------
+ * A time bucket key is computed by rounding the expiry timestamp up to the
+ * nearest aligned window using `get_bucket_ts()`.
  *
- * Volatile Set RAX Structure with Tagged Bucket Types
+ *-----------------------------------------------------------------------------
+ * Entry Addition and Bucket Promotion
+ *-----------------------------------------------------------------------------
  *
- *      +---------------------------------------+
- *      |               RAX                     |
- *      +---------------------------------------+
- *                 /         |           \
- *        +-----------+   +----------+  +------------+
- *        | Key: 1232 |   | Key: 1248|  | Key: 8192  |
- *        +-----------+   +----------+  +------------+
- *        | Bucket: * |   | Bucket: *|  | Bucket: *  |
- *        |  Single   |   |  Vector  |  |  HashTbl   |
- *        +-----------+   +----------+  +------------+
+ * When a new entry is added:
  *
- * Bucket Types:
+ * 1. If the current set is `NONE`, it becomes a `SINGLE` bucket.
+ * 2. If the set is a `SINGLE` bucket and another entry arrives:
+ *      → it is promoted to a `VECTOR` bucket (sorted by expiry).
+ * 3. If the `VECTOR` exceeds `VOLATILESET_VECTOR_BUCKET_MAX_SIZE` (127):
+ *      → the set becomes a `RAX`, and existing entries are migrated.
  *
- * 1. SINGLE (Tagged LSB == 1):
- *    +-----------------------+
- *    | entry (odd pointer)  |
- *    +-----------------------+
+ *-----------------------------------------------------------------------------
+ * RAX Bucket and Dynamic Splitting
+ *-----------------------------------------------------------------------------
  *
- * 2. VECTOR (Tag == x00 binary):
- *    +------------------------+
- *    | pointer_vector *      |
- *    |  [entry1, entry2, ...]|
- *    +------------------------+
+ * A `VSET_BUCKET_RAX` bucket stores multiple time-aligned buckets in a radix tree.
+ * Each key in the RAX represents the **end timestamp** of a bucket window.
  *
- * 3. HASHTABLE (Tag == x10 binary):
- *    +------------------------+
- *    | hashtable *           |
- *    |  {"field1": entry1}   |
- *    |  {"field2": entry2}   |
- *    +------------------------+
+ * When a bucket in RAX becomes full (vector limit exceeded):
+ * - The vector is split into two parts using a **binary search** to find an optimal
+ *   split point where the expiry bucket timestamp changes.
+ * - Two new buckets are created and inserted back into the RAX with their new
+ *   aligned timestamps as keys.
+ * - If entries cannot be split (all in same window), the bucket is promoted to HT.
  *
- * Notes:
- * - All keys in the RAX are timestamps (as `long long`) indicating the
- *   end of the time window for a bucket.
- * - Entries must be pointers with the **LSB bit set** (odd memory addresses),
- *   which is true for SDS strings.
- * - Buckets grow from SINGLE → VECTOR → HASHTABLE based on size and distribution.
- * - Removal may shrink HASHTABLE/VECTOR back to VECTOR/SINGLE if small.
+ *-----------------------------------------------------------------------------
+ * RAX Bucket Layout
+ *-----------------------------------------------------------------------------
  *
- * --------------------------------------------------------------------------
- * Insertion
- * --------------------------------------------------------------------------
- * Each rax key corresponds to a bucket end timestamp. When a new entry is
- * added, the set searches for the first bucket whose timestamp is greater
- * than the entry's expiration. If:
+ * * RAX View with Time Keys:
  *
- *  - No such bucket exists, or
- *  - The entry does not fit within the bucket’s window,
+ *     expiry_buckets = rax * | 0x6
  *
- * ...a new bucket is created. Initially, it is of SINGLE type. Buckets are
- * promoted as they grow:
+ *     +--------------------------+
+ *     | RAX (key = bucket_ts)   |
+ *     |--------------------------|
+ *     | "000016" → [entry1]     |  ← Vector (SINGLE→VECTOR→HT)
+ *     | "000032" → [entry2...]  |  ← Full vector, might split
+ *     | "000048" → [entry...]   |
+ *     +--------------------------+
  *
- *      SINGLE → VECTOR → HASHTABLE
+ * * Splitting a Full Vector in RAX:
  *
- * When inserting into a VECTOR bucket:
- *  - The vector is kept sorted by expiration timestamp.
- *  - If full, an attempt is made to split the vector into two balanced ones.
- *  - If all timestamps are too similar to split, the bucket is promoted to a
- *    HASHTABLE.
+ *     Suppose vector at key "000032" has 13 entries:
  *
- * --------------------------------------------------------------------------
- * Removal and Downgrade
- * --------------------------------------------------------------------------
- * Removing an entry:
- *  - Locates the appropriate bucket by searching for the first bucket whose
- *    timestamp is greater than the entry’s expiration.
- *  - Removes the entry from the bucket.
- *  - If the bucket shrinks to a single entry, it is downgraded back to SINGLE.
+ *     1. Use binary search to find a transition point in expiry bucket_ts.
+ *        We search the first 2 following entries which belong to different lwo granularity time windows,
+ *        but as close as possible to the middle of the vector:
+ *            [entry1, entry7, ..., entry13]
+ *                          ↑
+ *                         split (first where get_bucket_ts(entry) > min_ts)
  *
- * --------------------------------------------------------------------------
- * Advantages
- * --------------------------------------------------------------------------
- * - Memory-efficient storage using tagged pointers and dynamic structure scaling.
- * - Fast time-based lookup, insertion, and expiration.
- * - Efficient iteration using radix tree ordering.
- * - Well-suited for time-sensitive caches, ephemeral data, or short-lived sets.
+ *     2. Create two vectors:
+ *            bucket A → [entry1..entry6]  with key = "000032"
+ *            bucket B → [entry7..entry13] with key = "000048"
  *
- * --------------------------------------------------------------------------
- * Example Bucket Memory Layouts
- * --------------------------------------------------------------------------
- * [SINGLE]
- * rax: key = 1234567890
- *      value = <entry pointer with LSB=1>
+ *     3. Insert both back to the RAX.
  *
- * [VECTOR]
- * rax: key = 1234567910
- *      value = (tagged pointer) → pointer_vector of entry pointers
+ *-----------------------------------------------------------------------------
+ * Bucket Lifecycle
+ *-----------------------------------------------------------------------------
  *
- * [HASHTABLE]
- * rax: key = 1234568000
- *      value = (tagged pointer) → hashtable of entry pointers
+ *     NONE
+ *       |
+ *       v
+ *     SINGLE (1 entry)
+ *       |
+ *       v
+ *     VECTOR (sorted, up to 127)
+ *       |
+ *       v
+ *     RAX
+ *       |
+ *       v
+ *     +-------------+
+ *     | key → bucket|
+ *     +-------------+
+ *     | "000016" → VECTOR
+ *     | "000032" → HT
+ *     | "000048" → SINGLE
+ *     +-------------+
  *
- * --------------------------------------------------------------------------
- * Notes
- * --------------------------------------------------------------------------
- * - All expiration timestamps are UNIX milliseconds.
- * - All entry pointers **must** be odd-addressed (LSB = 1).
- * - Buckets are dynamically upgraded or downgraded based on size.
- * - Iteration and expiration use efficient radix-based access patterns.
+ *-----------------------------------------------------------------------------
+ * Entry Type Contract
+ *-----------------------------------------------------------------------------
  *
- * --------------------------------------------------------------------------
- * See Also:
- * volatileSetRemoveEntry()
- * volatileSetAddEntry()
- * volatileSetUpdateEntry()
- * volatileSetdPopExpired()
- * volatileSetFirstExpired()
- * volatileSetIsEmpty(volatile_set *set)
- * volatileSetStart()
- * volatileSetNext()
- * volatileSetReset()
- * freeVolatileSet()
- * createVolatileSet()
- * - `pointer_vector`, `hashtable`, and tagged pointer APIs.
- *----------------------------------------------------------------------------*/
+ * Users must supply a `volatileEntryType` implementation:
+ *
+ *     typedef struct {
+ *         sds (*entryGetKey)(const void *entry);      // get key
+ *         long long (*getExpiry)(const void *entry);  // get expiry
+ *         int (*expire)(void *db, void *o, void *entry); // trigger expiry
+ *     } volatileEntryType;
+ *
+ *-----------------------------------------------------------------------------
+ * Public API
+ *-----------------------------------------------------------------------------
+ *
+ * Create/Free:
+ *     volatile_set *createVolatileSet(volatileEntryType *type);
+ *     void freeVolatileSet(volatile_set *set);
+ *
+ * Mutation:
+ *     int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
+ *     int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
+ *     int volatileSetUpdateEntry(volatile_set *set, void *old_entry,
+ *                                void *new_entry, long long old_expiry,
+ *                                long long new_expiry);
+ *
+ * Expiry Retrieval:
+ *     void *volatileSetFirstExpired(volatile_set *set, mstime_t now);
+ *     void *volatileSetdPopExpired(volatile_set *set, mstime_t now);
+ *
+ * Utilities:
+ *     bool volatileSetIsEmpty(volatile_set *set);
+ *
+ * Iteration:
+ *     void volatileSetStart(volatile_set *set, volatileSetIterator *it);
+ *     int volatileSetNext(volatileSetIterator *it, void **entryptr);
+ *     void volatileSetReset(volatileSetIterator *it);
+ *
+ *-----------------------------------------------------------------------------
+ * Iteration Support
+ *-----------------------------------------------------------------------------
+ *
+ * Iterator structure maintains context across all bucket types:
+ *
+ *     typedef struct volatileSetIterator {
+ *         raxIterator riter;           // for RAX
+ *         hashtableIterator hiter;     // for HT
+ *         uint32_t viter;              // for VECTOR
+ *         void *vsingle;               // for SINGLE
+ *         vsetBucket *parent_bucket;   // owning bucket
+ *         vsetBucket *bucket;          // active bucket
+ *         void *entry;                 // current entry
+ *         long long bucket_ts;         // for RAX
+ *         int iteration_state;         // internal FSM
+ *     } volatileSetIterator;
+ * */
 
 #define VOLATILESET_BUCKET_INTERVAL_MAX (1LL << 13LL) // 2^13 = 8192 milliseconds
 #define VOLATILESET_BUCKET_INTERVAL_MIN (1LL << 4LL)  // 2^4 = 16 milliseconds
@@ -200,22 +207,33 @@ typedef struct {
 
 } volatileEntryType;
 
+// Generic bucket type
+typedef void vsetBucket;
 
 typedef struct {
     volatileEntryType *etypr;
-    rax *expiry_buckets;
+    vsetBucket *expiry_buckets;
 } volatile_set;
 
 typedef struct volatileSetIterator {
-    raxIterator bucket;
-    /* Different bucket iterator types */
+    /* for rax bucket */
+    raxIterator riter;
+    /* for hashtable bucket */
     hashtableIterator hiter;
+    /* for vector bucket */
     uint32_t viter;
+    /* for single bucket */
+    void *vsingle;
+    /* the parent of the bucket we are currently iterating on */
+    vsetBucket *parent_bucket;
+    /* the bucket we are currently iterating on */
+    vsetBucket *bucket;
+    /* the pointer entry */
     void *entry;
+    /* In case of rax encoded set, this is the current iterated bucket timestamp */
     long long bucket_ts;
-    //volatile_set *set;
-    int iteration_state;
-    
+    /* the state of the iteration */
+    int iteration_state; 
 } volatileSetIterator;
 
 int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
