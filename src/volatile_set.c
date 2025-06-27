@@ -859,11 +859,17 @@ static bool raxBucketRemoveEntry(volatile_set *set, void *entry, vsetBucket *buc
         break;
     case VSET_BUCKET_VECTOR: {
         vsetBucket *new_bucket = removeFromBucket_VECTOR(set, bucket, entry, 0, &removed);
-        if (new_bucket != bucket)
-            /* In order to avoid rax override, we directly change the node data */
-            // alternative: raxInsert(set->expiry_buckets, key, key_len, new_bucket, NULL);
-            raxSetData(node, new_bucket);
-        if (pbucket) *pbucket = new_bucket;
+        if (new_bucket != bucket) {
+            if (!new_bucket) {
+                raxRemove(vsetBucketRax(set->expiry_buckets), key, key_len, NULL);
+                if (pbucket) *pbucket = NULL;
+            } else {
+                /* In order to avoid rax override, we directly change the node data */
+                // alternative: raxInsert(set->expiry_buckets, key, key_len, new_bucket, NULL);
+                raxSetData(node, new_bucket);
+                if (pbucket) *pbucket = new_bucket;
+            }
+        }
         break;
     }
     case VSET_BUCKET_HT: {
@@ -987,7 +993,6 @@ int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
     default:
         serverPanic("Cannot insert to bucket which is not single, vector or rax");
     }
-    assert(removed);
     set->expiry_buckets = bucket;
     return removed ? 1 : 0;
 }

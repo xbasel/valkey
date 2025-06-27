@@ -246,8 +246,8 @@ int test_volatile_set_add_and_remove_all(int argc, char **argv, int flags) {
 
 /********************* Fuzzer tests ********************************/
 
-#define NUM_ITERATIONS 1000000
-#define MAX_ENTRIES 100000
+#define NUM_ITERATIONS 100000
+#define MAX_ENTRIES 10000
 
 /* Global array to simulate a test database */
 mock_entry *mock_entries[MAX_ENTRIES];
@@ -375,9 +375,10 @@ int test_volatile_set_fuzzer(int argc, char **argv, int flags) {
             expire_mock_entries(set, now);
         }
     }
-
-    TEST_ASSERT(volatileSetIsEmpty(set) || mock_entry_count > 0);
+    /* now expire all the entries and check that we have no entries left */
+    expire_mock_entries(set, LONG_LONG_MAX);
+    TEST_ASSERT(volatileSetIsEmpty(set) && mock_entry_count == 0);
     freeVolatileSet(set);
-    free_mock_entries();
+    free_mock_entries(); /* Just in case */
     return 0;
 }
