@@ -847,6 +847,77 @@ static inline vsetBucket *removeFromBucket_HASHTABLE(volatile_set *set, vsetBuck
     return new_bucket;
 }
 
+static int vsetBucketNext_NONE(volatileSetIterator *it, void **entryptr) {
+    UNUSED(it);
+    UNUSED(entryptr);
+    return 0;
+}
+static inline int vsetBucketNext_SINGLE(volatileSetIterator *it, void **entryptr) {
+    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
+    if (init_bucket_scan) {
+        it->iteration_state = VSET_BUCKET_SINGLE;
+        it->entry = vsetBucketSingle(it->bucket);
+        if (entryptr) *entryptr = it->entry;
+        return 1;
+    }
+    return 0;
+}
+static inline int vsetBucketNext_VECTOR(volatileSetIterator *it, void **entryptr) {
+    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
+    pointer_vector *pv = vsetBucketVector(it->bucket);
+    if (init_bucket_scan) {
+        it->iteration_state = VSET_BUCKET_VECTOR;
+        it->viter = 0;
+    } else {
+        it->viter++;
+    }
+    if (it->viter < pv_len(pv)) {
+        it->entry = pv_get(pv, it->viter);
+    } else {
+        return 0;
+    }
+    if (entryptr) *entryptr = it->entry;
+    return 1;
+}
+
+static inline int vsetBucketNext_HASHTABLE(volatileSetIterator *it, void **entryptr) {
+    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
+    hashtable *ht = vsetBucketHashtable(it->bucket);
+    if (init_bucket_scan) {
+        it->iteration_state = VSET_BUCKET_HT;
+        hashtableInitIterator(&it->hiter, ht, 0);
+    }
+    if (!hashtableNext(&it->hiter, &it->entry)) {
+        hashtableResetIterator(&it->hiter);
+        return 0;
+    }
+    if (entryptr) *entryptr = it->entry;
+    return 1;
+}
+
+static inline int vsetBucketNext_RAX(volatileSetIterator *it, void **entryptr) {
+    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
+    if (init_bucket_scan) {
+        /* set myself as the parent bucket */
+        it->parent_bucket = it->bucket;
+        raxStart(&it->riter, vsetBucketRax(it->bucket));
+        raxSeek(&it->riter, "^", NULL, 0);
+    }
+    if (raxNext(&it->riter)) {
+        /* lets start again by going into the first bucket. */
+        it->iteration_state = vsetBucketType(it->riter.data);
+        it->bucket_ts = decodeExpiryKey(it->riter.key);
+        it->bucket = it->riter.data;
+        it->iteration_state = VSET_BUCKET_NONE;
+        return volatileSetNext(it, entryptr);
+    } else {
+        /* We currently do not support nested RAX buckets */
+        it->parent_bucket = vsetBucketSetNone(it->parent_bucket);
+        return 0;
+    }
+    return 1;
+}
+
 static bool raxBucketRemoveEntry(volatile_set *set, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
     bool removed = false;
     switch (vsetBucketType(bucket)) {
@@ -1011,15 +1082,54 @@ int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, 
 }
 
 static void *volatileSetGetFirstExpired(volatile_set *set, mstime_t now, bool delete) {
-    volatileSetIterator it;
+    int set_type = vsetBucketType(set->expiry_buckets);
     void *entry = NULL;
-    volatileSetStart(set, &it);
-    if (volatileSetNext(&it, NULL) && (it.bucket_ts <= now)) {
-        entry = it.entry;
+    long long expiry;
+    switch (set_type) {
+    case VSET_BUCKET_NONE:
+        return NULL;
+        break;
+    case VSET_BUCKET_RAX: {
+        volatileSetIterator iter;
+        volatileSetStart(set, &iter);
+        assert(vsetBucketNext_RAX(&iter, &entry));
+        long long bucket_ts = iter.bucket_ts;
+        volatileSetReset(&iter);
+        if (bucket_ts > now)
+            return NULL;
+        expiry = set->etypr->getExpiry(entry);
+        assert(expiry <= now);
+        break;
     }
-    volatileSetReset(&it);
-    if (entry && delete)
-        volatileSetRemoveEntry(set, entry, set->etypr->getExpiry(entry));
+    case VSET_BUCKET_SINGLE: {
+        entry = vsetBucketSingle(set->expiry_buckets);
+        expiry = set->etypr->getExpiry(entry);
+        if (expiry > now)
+            return NULL;
+        break;
+    }
+    case VSET_BUCKET_VECTOR: {
+        entry = pv_get(vsetBucketVector(set->expiry_buckets), 0);
+        expiry = set->etypr->getExpiry(entry);
+        if (expiry > now)
+            return NULL;
+        break;
+    }
+    case VSET_BUCKET_HT: {
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, vsetBucketHashtable(set->expiry_buckets), 0);
+        assert(hashtableNext(&iter, &entry));
+        hashtableResetIterator(&iter);
+        expiry = set->etypr->getExpiry(entry);
+        if (expiry > now)
+            return NULL;
+        break;
+    }
+    default:
+        serverPanic("Unknown volatile set bucket type in volatileSetNext");
+    }
+    if (delete)
+        assert(volatileSetRemoveEntry(set, entry, expiry));
     return entry;
 }
 
@@ -1029,77 +1139,6 @@ void *volatileSetdPopExpired(volatile_set *set, mstime_t now) {
 
 void *volatileSetFirstExpired(volatile_set *set, mstime_t now) {
     return volatileSetGetFirstExpired(set, now, false);
-}
-
-static int vsetBucketNext_NONE(volatileSetIterator *it, void **entryptr) {
-    UNUSED(it);
-    UNUSED(entryptr);
-    return 0;
-}
-static inline int vsetBucketNext_SINGLE(volatileSetIterator *it, void **entryptr) {
-    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
-    if (init_bucket_scan) {
-        it->iteration_state = VSET_BUCKET_SINGLE;
-        it->entry = vsetBucketSingle(it->bucket);
-        if (entryptr) *entryptr = it->entry;
-        return 1;
-    }
-    return 0;
-}
-static inline int vsetBucketNext_VECTOR(volatileSetIterator *it, void **entryptr) {
-    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
-    pointer_vector *pv = vsetBucketVector(it->bucket);
-    if (init_bucket_scan) {
-        it->iteration_state = VSET_BUCKET_VECTOR;
-        it->viter = 0;
-    } else {
-        it->viter++;
-    }
-    if (it->viter < pv_len(pv)) {
-        it->entry = pv_get(pv, it->viter);
-    } else {
-        return 0;
-    }
-    if (entryptr) *entryptr = it->entry;
-    return 1;
-}
-
-static inline int vsetBucketNext_HASHTABLE(volatileSetIterator *it, void **entryptr) {
-    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
-    hashtable *ht = vsetBucketHashtable(it->bucket);
-    if (init_bucket_scan) {
-        it->iteration_state = VSET_BUCKET_HT;
-        hashtableInitIterator(&it->hiter, ht, 0);
-    }
-    if (!hashtableNext(&it->hiter, &it->entry)) {
-        hashtableResetIterator(&it->hiter);
-        return 0;
-    }
-    if (entryptr) *entryptr = it->entry;
-    return 1;
-}
-
-static inline int vsetBucketNext_RAX(volatileSetIterator *it, void **entryptr) {
-    bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
-    if (init_bucket_scan) {
-        /* set myself as the parent bucket */
-        it->parent_bucket = it->bucket;
-        raxStart(&it->riter, vsetBucketRax(it->bucket));
-        raxSeek(&it->riter, "^", NULL, 0);
-    }
-    if (raxNext(&it->riter)) {
-        /* lets start again by going into the first bucket. */
-        it->iteration_state = vsetBucketType(it->riter.data);
-        it->bucket_ts = decodeExpiryKey(it->riter.key);
-        it->bucket = it->riter.data;
-        it->iteration_state = VSET_BUCKET_NONE;
-        return volatileSetNext(it, entryptr);
-    } else {
-        /* We currently do not support nested RAX buckets */
-        it->parent_bucket = vsetBucketSetNone(it->parent_bucket);
-        return 0;
-    }
-    return 1;
 }
 
 int volatileSetNext(volatileSetIterator *it, void **entryptr) {
@@ -1137,6 +1176,7 @@ int volatileSetNext(volatileSetIterator *it, void **entryptr) {
 void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
     it->iteration_state = VSET_BUCKET_NONE; /*lets start by going to the first bucket. */
     it->bucket = set->expiry_buckets;
+    it->bucket_ts = -1;
     it->parent_bucket = vsetBucketSetNone(it->parent_bucket);
 }
 
