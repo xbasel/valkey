@@ -325,6 +325,7 @@ int expire_mock_entries(volatile_set *set, mstime_t now) {
     do {
         entry = volatileSetdPopExpired(set, now);
         if (entry) {
+            TEST_ASSERT(mockGetExpiry(entry) <= now);
             // printf("pop expire entry %p with expiry %llu\n", entry, mockGetExpiry(entry));
             mock_entry_expire(NULL, NULL, entry);
         }
