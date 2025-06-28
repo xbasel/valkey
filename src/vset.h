@@ -15,7 +15,7 @@
  * Volatile Set - Adaptive, Expiry-aware Set Structure
  *-----------------------------------------------------------------------------
  *
- * The `volatile_set` is a dynamic, memory-efficient container for managing
+ * The `vset` is a dynamic, memory-efficient container for managing
  * entries with expiry semantics. It is designed to efficiently track entries
  * that expire at varying times and scales to large sets by adapting its internal
  * representation as it grows or shrinks.
@@ -24,7 +24,7 @@
  * Expiry Buckets and Pointer Tagging
  *-----------------------------------------------------------------------------
  *
- * Internally, the `volatile_set` maintains a single `vsetBucket*` pointer,
+ * Internally, the `vset` maintains a single `vsetBucket*` pointer,
  * which can point to different types of buckets depending on the number of
  * entries and the needed resolution. The pointer is tagged using the lowest 3 bits:
  *
@@ -153,25 +153,25 @@
  *-----------------------------------------------------------------------------
  *
  * Create/Free:
- *     volatile_set *createVolatileSet(volatileEntryType *type);
- *     void freeVolatileSet(volatile_set *set);
+ *     vset *createVolatileSet(volatileEntryType *type);
+ *     void freeVolatileSet(vset *set);
  *
  * Mutation:
- *     int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
- *     int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
- *     int volatileSetUpdateEntry(volatile_set *set, void *old_entry,
+ *     int volatileSetAddEntry(vset *set, void *entry, long long expiry);
+ *     int volatileSetRemoveEntry(vset *set, void *entry, long long expiry);
+ *     int volatileSetUpdateEntry(vset *set, void *old_entry,
  *                                void *new_entry, long long old_expiry,
  *                                long long new_expiry);
  *
  * Expiry Retrieval:
- *     void *volatileSetFirstExpired(volatile_set *set, mstime_t now);
- *     void *volatileSetdPopExpired(volatile_set *set, mstime_t now);
+ *     void *volatileSetFirstExpired(vset *set, mstime_t now);
+ *     void *volatileSetdPopExpired(vset *set, mstime_t now);
  *
  * Utilities:
- *     bool volatileSetIsEmpty(volatile_set *set);
+ *     bool volatileSetIsEmpty(vset *set);
  *
  * Iteration:
- *     void volatileSetStart(volatile_set *set, volatileSetIterator *it);
+ *     void volatileSetStart(vset *set, volatileSetIterator *it);
  *     int volatileSetNext(volatileSetIterator *it, void **entryptr);
  *     void volatileSetReset(volatileSetIterator *it);
  *
@@ -213,7 +213,7 @@ typedef void vsetBucket;
 typedef struct {
     volatileEntryType *etypr;
     vsetBucket *expiry_buckets;
-} volatile_set;
+} vset;
 
 typedef struct volatileSetIterator {
     /* for rax bucket */
@@ -236,17 +236,17 @@ typedef struct volatileSetIterator {
     int iteration_state; 
 } volatileSetIterator;
 
-int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry);
-int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry);
-void *volatileSetdPopExpired(volatile_set *set, mstime_t now);
-void *volatileSetFirstExpired(volatile_set *set, mstime_t now);
-int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
-bool volatileSetIsEmpty(volatile_set *set);
-void volatileSetStart(volatile_set *set, volatileSetIterator *it);
+int volatileSetRemoveEntry(vset *set, void *entry, long long expiry);
+int volatileSetAddEntry(vset *set, void *entry, long long expiry);
+void *volatileSetdPopExpired(vset *set, mstime_t now);
+void *volatileSetFirstExpired(vset *set, mstime_t now);
+int volatileSetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+bool volatileSetIsEmpty(vset *set);
+void volatileSetStart(vset *set, volatileSetIterator *it);
 int volatileSetNext(volatileSetIterator *it, void **entryptr);
 void volatileSetReset(volatileSetIterator *it);
-void freeVolatileSet(volatile_set *b);
-volatile_set *createVolatileSet(volatileEntryType *type);
+void freeVolatileSet(vset *b);
+vset *createVolatileSet(volatileEntryType *type);
 
 
 #endif

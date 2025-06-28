@@ -1,4 +1,4 @@
-#include "../volatile_set.h"
+#include "../vset.h"
 #include "../entry.h"
 #include "test_help.h"
 #include "../zmalloc.h"
@@ -44,7 +44,7 @@ static int mockExpire(void *db, void *o, void *entry) {
     return 1;
 }
 
-int test_volatile_set_add_and_iterate(int argc, char **argv, int flags) {
+int test_vset_add_and_iterate(int argc, char **argv, int flags) {
     return 0;
     (void)argc;
     (void)argv;
@@ -56,7 +56,7 @@ int test_volatile_set_add_and_iterate(int argc, char **argv, int flags) {
         .expire = mockExpire,
     };
 
-    volatile_set *set = createVolatileSet(&type);
+    vset *set = createVolatileSet(&type);
     TEST_ASSERT(set != NULL);
 
     mock_entry *e1 = mockCreateEntry("item1", 123);
@@ -88,7 +88,7 @@ int test_volatile_set_add_and_iterate(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_volatile_set_large_batch_same_expiry(int argc, char **argv, int flags) {
+int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
     return 0;
     (void)argc;
     (void)argv;
@@ -100,7 +100,7 @@ int test_volatile_set_large_batch_same_expiry(int argc, char **argv, int flags) 
         .expire = mockExpire,
     };
 
-    volatile_set *set = createVolatileSet(&type);
+    vset *set = createVolatileSet(&type);
     TEST_ASSERT(set != NULL);
 
     const long long expiry_time = 1000LL;
@@ -145,7 +145,7 @@ int test_volatile_set_large_batch_same_expiry(int argc, char **argv, int flags) 
     return 0;
 }
 
-int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags) {
+int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
     return 0;
     (void)argc;
     (void)argv;
@@ -157,7 +157,7 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
         .expire = mockExpire,
     };
 
-    volatile_set *set = createVolatileSet(&type);
+    vset *set = createVolatileSet(&type);
     TEST_ASSERT(set != NULL);
 
     // Prepare entries with mixed expiry times, some duplicates
@@ -207,7 +207,7 @@ int test_volatile_set_iterate_multiple_expiries(int argc, char **argv, int flags
     return 0;
 }
 
-int test_volatile_set_add_and_remove_all(int argc, char **argv, int flags) {
+int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -218,7 +218,7 @@ int test_volatile_set_add_and_remove_all(int argc, char **argv, int flags) {
         .expire = mockExpire,
     };
 
-    volatile_set *set = createVolatileSet(&type);
+    vset *set = createVolatileSet(&type);
     TEST_ASSERT(set != NULL);
 
     const int total_entries = 130;
@@ -282,7 +282,7 @@ mock_entry *mock_entry_create(const char *keystr, long long expiry) {
     return mockCreateEntry(keystr, expiry);
 }
 
-int insert_mock_entry(volatile_set *set) {
+int insert_mock_entry(vset *set) {
     if (mock_entry_count >= MAX_ENTRIES) return 0;
     char keybuf[32];
     snprintf(keybuf, sizeof(keybuf), "key_%d", rand());
@@ -295,7 +295,7 @@ int insert_mock_entry(volatile_set *set) {
     return 0;
 }
 
-int update_mock_entry(volatile_set *set) {
+int update_mock_entry(vset *set) {
     if (mock_entry_count == 0) return 0;
     int idx = rand() % mock_entry_count;
     mock_entry *old = mock_entries[idx];
@@ -308,7 +308,7 @@ int update_mock_entry(volatile_set *set) {
     return 0;
 }
 
-int remove_mock_entry(volatile_set *set) {
+int remove_mock_entry(vset *set) {
     if (mock_entry_count == 0) return 0;
     int idx = rand() % mock_entry_count;
     mock_entry *e = mock_entries[idx];
@@ -320,7 +320,7 @@ int remove_mock_entry(volatile_set *set) {
     return 0;
 }
 
-int expire_mock_entries(volatile_set *set, mstime_t now) {
+int expire_mock_entries(vset *set, mstime_t now) {
     void *entry;
     do {
         entry = volatileSetdPopExpired(set, now);
@@ -342,7 +342,7 @@ int free_mock_entries(void) {
 }
 
 /* --------- Fuzzer Test --------- */
-int test_volatile_set_fuzzer(int argc, char **argv, int flags) {
+int test_vset_fuzzer(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -353,7 +353,7 @@ int test_volatile_set_fuzzer(int argc, char **argv, int flags) {
         .getExpiry = mock_entry_get_expiry,
         .expire = mock_entry_expire};
 
-    volatile_set *set = createVolatileSet(&type);
+    vset *set = createVolatileSet(&type);
 
     for (int i = 0; i < NUM_ITERATIONS; i++) {
         int op = rand() % 4;

@@ -35,7 +35,7 @@
 #include "hashtable.h"
 #include "rax.h"
 #include "sds.h"
-#include "volatile_set.h"
+#include "vset.h"
 #include "server.h"
 #include "zmalloc.h"
 #include <math.h>
@@ -52,13 +52,13 @@ volatileEntryType hashVolatileEntryType = {
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
 
-static volatile_set *hashTypeGetVolatileSet(robj *o) {
+static vset *hashTypeGetVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    return *(volatile_set **)hashtableMetadata(o->ptr);
+    return *(vset **)hashtableMetadata(o->ptr);
 }
 
 void hashTypeFreeVolatileSet(robj *o) {
-    volatile_set *set = hashTypeGetVolatileSet(o);
+    vset *set = hashTypeGetVolatileSet(o);
     if (set)
         freeVolatileSet(set);
 }
@@ -79,33 +79,33 @@ void hashTypeIgnoreTTL(robj *o, bool ignore) {
     }
 }
 
-static volatile_set *hashTypeGetOrcreateVolatileSet(robj *o) {
+static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    if (*volatile_set_ref == NULL) {
-        *volatile_set_ref = createVolatileSet(&hashVolatileEntryType);
+    vset **vset_ref = hashtableMetadata(o->ptr);
+    if (*vset_ref == NULL) {
+        *vset_ref = createVolatileSet(&hashVolatileEntryType);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
         hashTypeIgnoreTTL(o, false);
     }
-    return *volatile_set_ref;
+    return *vset_ref;
 }
 
 static void hashTypeDeleteVolatileSet(robj *o) {
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    freeVolatileSet(*volatile_set_ref);
-    *volatile_set_ref = NULL;
+    vset **vset_ref = hashtableMetadata(o->ptr);
+    freeVolatileSet(*vset_ref);
+    *vset_ref = NULL;
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
     hashTypeIgnoreTTL(o, true);
 }
 
 void hashTypeTrackEntry(robj *o, void *entry) {
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
+    vset *set = hashTypeGetOrcreateVolatileSet(o);
     serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
-    volatile_set *set = hashTypeGetVolatileSet(o);
+    vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
     serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
     if (volatileSetIsEmpty(set)) {
@@ -120,7 +120,7 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     if (!old_tracked && !new_tracked)
         return;
 
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
+    vset *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(set);
 
     if (old_tracked && !new_tracked)
@@ -128,7 +128,7 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     else if (new_tracked && !old_tracked)
         serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
     else {
-        volatile_set *set = hashTypeGetVolatileSet(o);
+        vset *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
         serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }

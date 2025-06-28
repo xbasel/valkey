@@ -80,7 +80,7 @@
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
-#include "volatile_set.h"
+#include "vset.h"
 #include "trace/trace.h"
 #include "entry.h"
 

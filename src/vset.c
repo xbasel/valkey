@@ -1,5 +1,5 @@
 #include <string.h>
-#include "volatile_set.h"
+#include "vset.h"
 #include "rax.h"
 #include "zmalloc.h"
 #include "endianconv.h"
@@ -448,7 +448,7 @@ static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
  * elem Pointer to the element to insert
  * cmp Comparison function (like strcmp-style: <0, ==0, >0)
  * returns the insertion index (between 0 and sv->len) */
-uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, long long expiry) {
+uint32_t _find_insert_position(vset *set, vsetBucket *bucket, long long expiry) {
     pointer_vector *sv = vsetBucketVector(bucket);
     uint32_t left = 0;
     uint32_t right = pv_len(sv);
@@ -467,7 +467,7 @@ uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, long long 
 /* _find_split_position - Find the optimal split index in a sorted pointer vector
  *  based on coarse (bucketed) expiry timestamps.
  * Arguments
- * set:    Pointer to the `volatile_set` containing the element type and expiry logic.
+ * set:    Pointer to the `vset` containing the element type and expiry logic.
  * bucket: Pointer to a `vsetBucket` holding a sorted `pointer_vector` of elements.
  * split_ts: an optional pointer to a location to store the split timestamp, that is the position
  * belonging in the lower split vector with the largest expiration time.
@@ -509,7 +509,7 @@ uint32_t _find_insert_position(volatile_set *set, vsetBucket *bucket, long long 
  * This guarantees that each vector contains elements with the same bucket timestamp,
  * and no value in the first part maps to the same or later bucket as the second part.
  */
-uint32_t _find_split_position(volatile_set *set, vsetBucket *bucket, long long *split_ts_out) {
+uint32_t _find_split_position(vset *set, vsetBucket *bucket, long long *split_ts_out) {
     pointer_vector *sv = vsetBucketVector(bucket);
 
     if (!sv || sv->len < 2) return sv->len;
@@ -627,7 +627,7 @@ static void freeVsetBucket(void *entry) {
     }
 }
 
-static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long long bucket_ts, raxNode *node) {
+static bool splitBucketIfPossible(vset *set, vsetBucket *bucket, long long bucket_ts, raxNode *node) {
     /* We can only split vector encoded buckets */
     if (vsetBucketType(bucket) != VSET_BUCKET_VECTOR) {
         return false;
@@ -674,13 +674,13 @@ static bool splitBucketIfPossible(volatile_set *set, vsetBucket *bucket, long lo
     return true;
 }
 
-static inline vsetBucket *insertToBucket_NONE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_NONE(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
     UNUSED(set);
     UNUSED(expiry);
     return vsetBucketSetSingle(bucket, entry);
 }
 
-static inline vsetBucket *insertToBucket_SINGLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_SINGLE(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
     /* Upgrade to vector */
     pointer_vector *sv = pv_new(2);
     void *curr_entry = vsetBucketSingle(bucket);
@@ -696,7 +696,7 @@ static inline vsetBucket *insertToBucket_SINGLE(volatile_set *set, vsetBucket *b
     return bucket;
 }
 
-static inline vsetBucket *insertToBucket_VECTOR(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_VECTOR(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
     pointer_vector *pv = vsetBucketVector(bucket);
     /* limit of the number of elements in a vector. */
     if (pv_len(pv) >= VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
@@ -717,7 +717,7 @@ static inline vsetBucket *insertToBucket_VECTOR(volatile_set *set, vsetBucket *b
     return NULL;
 }
 
-static inline vsetBucket *insertToBucket_HASHTABLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_HASHTABLE(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
     UNUSED(set);
     UNUSED(expiry);
 
@@ -726,7 +726,7 @@ static inline vsetBucket *insertToBucket_HASHTABLE(volatile_set *set, vsetBucket
     return bucket;
 }
 
-static inline vsetBucket *insertToBucket_RAX(volatile_set *set, vsetBucket *target, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_RAX(vset *set, vsetBucket *target, void *entry, long long expiry) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     size_t key_len;
     long long bucket_ts;
@@ -778,7 +778,7 @@ static inline vsetBucket *insertToBucket_RAX(volatile_set *set, vsetBucket *targ
     return target;
 }
 
-static inline vsetBucket *removeFromBucket_SINGLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+static inline vsetBucket *removeFromBucket_SINGLE(vset *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
     UNUSED(set);
     UNUSED(expiry);
 
@@ -791,7 +791,7 @@ static inline vsetBucket *removeFromBucket_SINGLE(volatile_set *set, vsetBucket 
     }
 }
 
-static inline vsetBucket *removeFromBucket_VECTOR(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+static inline vsetBucket *removeFromBucket_VECTOR(vset *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
     UNUSED(set);
     UNUSED(expiry);
 
@@ -823,7 +823,7 @@ static inline vsetBucket *removeFromBucket_VECTOR(volatile_set *set, vsetBucket 
     return new_bucket;
 }
 
-static inline vsetBucket *removeFromBucket_HASHTABLE(volatile_set *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+static inline vsetBucket *removeFromBucket_HASHTABLE(vset *set, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
     UNUSED(set);
     UNUSED(expiry);
 
@@ -918,7 +918,7 @@ static inline int vsetBucketNext_RAX(volatileSetIterator *it, void **entryptr) {
     return 1;
 }
 
-static bool raxBucketRemoveEntry(volatile_set *set, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
+static bool raxBucketRemoveEntry(vset *set, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
     bool removed = false;
     switch (vsetBucketType(bucket)) {
     case VSET_BUCKET_SINGLE:
@@ -960,7 +960,7 @@ static bool raxBucketRemoveEntry(volatile_set *set, void *entry, vsetBucket *buc
     return removed;
 }
 
-static inline vsetBucket *removeFromBucket_RAX(volatile_set *set, vsetBucket *target, void *entry, long long expiry, bool *removed) {
+static inline vsetBucket *removeFromBucket_RAX(vset *set, vsetBucket *target, void *entry, long long expiry, bool *removed) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     long long bucket_ts;
     size_t key_len;
@@ -991,7 +991,7 @@ static inline vsetBucket *removeFromBucket_RAX(volatile_set *set, vsetBucket *ta
     return target;
 }
 
-int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
+int volatileSetAddEntry(vset *set, void *entry, long long expiry) {
     int bucket_type = vsetBucketType(set->expiry_buckets);
     switch (bucket_type) {
     case VSET_BUCKET_NONE:
@@ -1041,7 +1041,7 @@ int volatileSetAddEntry(volatile_set *set, void *entry, long long expiry) {
     return 1;
 }
 
-int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
+int volatileSetRemoveEntry(vset *set, void *entry, long long expiry) {
     bool removed;
     vsetBucket *bucket = set->expiry_buckets;
     int bucket_type = vsetBucketType(bucket);
@@ -1068,7 +1068,7 @@ int volatileSetRemoveEntry(volatile_set *set, void *entry, long long expiry) {
     return removed ? 1 : 0;
 }
 
-int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+int volatileSetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     if (old_entry == new_entry && old_expiry == new_expiry)
         return 1;
 
@@ -1081,7 +1081,7 @@ int volatileSetUpdateEntry(volatile_set *set, void *old_entry, void *new_entry, 
     return 1;
 }
 
-static void *volatileSetGetFirstExpired(volatile_set *set, mstime_t now, bool delete) {
+static void *volatileSetGetFirstExpired(vset *set, mstime_t now, bool delete) {
     int set_type = vsetBucketType(set->expiry_buckets);
     void *entry = NULL;
     long long expiry;
@@ -1133,11 +1133,11 @@ static void *volatileSetGetFirstExpired(volatile_set *set, mstime_t now, bool de
     return entry;
 }
 
-void *volatileSetdPopExpired(volatile_set *set, mstime_t now) {
+void *volatileSetdPopExpired(vset *set, mstime_t now) {
     return volatileSetGetFirstExpired(set, now, true);
 }
 
-void *volatileSetFirstExpired(volatile_set *set, mstime_t now) {
+void *volatileSetFirstExpired(vset *set, mstime_t now) {
     return volatileSetGetFirstExpired(set, now, false);
 }
 
@@ -1173,7 +1173,7 @@ int volatileSetNext(volatileSetIterator *it, void **entryptr) {
     return ret;
 }
 
-void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
+void volatileSetStart(vset *set, volatileSetIterator *it) {
     it->iteration_state = VSET_BUCKET_NONE; /*lets start by going to the first bucket. */
     it->bucket = set->expiry_buckets;
     it->bucket_ts = -1;
@@ -1189,19 +1189,19 @@ void volatileSetReset(volatileSetIterator *it) {
         hashtableResetIterator(&it->hiter);
 }
 
-volatile_set *createVolatileSet(volatileEntryType *type) {
-    volatile_set *set = zmalloc(sizeof(volatile_set));
+vset *createVolatileSet(volatileEntryType *type) {
+    vset *set = zmalloc(sizeof(vset));
     set->etypr = type;
     set->expiry_buckets = vsetBucketSetNone(set->expiry_buckets);
     return set;
 }
 
-void freeVolatileSet(volatile_set *set) {
+void freeVolatileSet(vset *set) {
     if (!set) return;
     freeVsetBucket(set->expiry_buckets);
     zfree(set);
 }
 
-bool volatileSetIsEmpty(volatile_set *set) {
+bool volatileSetIsEmpty(vset *set) {
     return vsetBucketType(set->expiry_buckets) == VSET_BUCKET_NONE;
 }
