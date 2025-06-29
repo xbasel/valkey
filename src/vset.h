@@ -3,7 +3,6 @@
 
 #include <stddef.h>
 #include <stdbool.h>
-#include "hashtable.h"
 
 #include "hashtable.h"
 #include "rax.h"
@@ -64,7 +63,7 @@
  *      → it is promoted to a `VECTOR` bucket (sorted by expiry).
  * 3. If the `VECTOR` exceeds `VOLATILESET_VECTOR_BUCKET_MAX_SIZE` (127):
  *      → the set becomes a `RAX`, and existing entries are migrated.
- * 4. IF the set is using RAX encoding it will locate a bucket to add the entry 
+ * 4. IF the set is using RAX encoding it will locate a bucket to add the entry
  *    following the strategy explained below.
  *
  *-----------------------------------------------------------------------------
@@ -72,7 +71,7 @@
  *-----------------------------------------------------------------------------
  *
  * Each bucket in the RAX bucket corresponds to a **time window**, defined by
- * its bucket timestamp (`bucket_ts`). This timestamp represents the **END** of 
+ * its bucket timestamp (`bucket_ts`). This timestamp represents the **END** of
  * the time window. Entries in the bucket must expire *before* this timestamp.
  *
  * Time windows are defined in granular ranges:
@@ -268,20 +267,12 @@
 #define VOLATILESET_VECTOR_BUCKET_MAX_SIZE 127
 
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
-typedef struct {
-    sds (*entryGetKey)(const void *entry);
-
-    long long (*getExpiry)(const void *entry);
-
-    int (*expire)(void*db, void* o, void *entry);
-
-} volatileEntryType;
 
 // Generic bucket type
 typedef void vsetBucket;
 
 // vset is just a pointer to a bucket
-typedef vsetBucket* vset;
+typedef vsetBucket *vset;
 
 typedef struct vsetIterator {
     /* for rax bucket */
@@ -301,7 +292,7 @@ typedef struct vsetIterator {
     /* In case of rax encoded set, this is the current iterated bucket timestamp */
     long long bucket_ts;
     /* the state of the iteration */
-    int iteration_state; 
+    int iteration_state;
 } vsetIterator;
 
 int vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry, long long expiry);
