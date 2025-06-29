@@ -1,49 +1,50 @@
-#include <string.h>
 #include "vset.h"
 #include "rax.h"
-#include "zmalloc.h"
 #include "endianconv.h"
 #include "serverassert.h"
 #include "hashtable.h"
-#include "server.h"
+#include "util.h"
+#include "zmalloc.h"
+
+#include <string.h>
 #include <stdint.h>
 
 /*************************************************************************************************************
- *                                pointer_vector Implementation
+ *                                pVector Implementation
  *************************************************************************************************************/
 
 #define PV_CARD_BITS 30
 #define PV_ALLOC_BITS 34
 #define PV_MAX_ELEMENTS ((1ULL << PV_CARD_BITS) - 1)
-#define PV_HEADER_SIZE (sizeof(pointer_vector))
+#define PV_HEADER_SIZE (sizeof(pVector))
 #define PV_ELEM_SIZE (sizeof(void *))
 #define PV_ALLOC(pv) (pv ? pv->alloc : 0)
 #define PV_LEN(pv) (pv ? pv->len : 0)
-#define PV_USED_SIZE(pv) (pv ? (PV_HEADER_SIZE + (pv_len(pv)) * PV_ELEM_SIZE) : 0)
+#define PV_USED_SIZE(pv) (pv ? (PV_HEADER_SIZE + (pvLen(pv)) * PV_ELEM_SIZE) : 0)
 
 /* Custom vector structure with embedded allocation and length counters */
 typedef struct {
-    uint64_t len : 30;   /* Number of elements */
-    uint64_t alloc : 34; /* Allocated capacity */
+    uint64_t len : 30;   /* Number of elements (cardinality) */
+    uint64_t alloc : 34; /* Allocated memory (zmalloc_size of the current vector allocation) */
     void *data[];        /* Flexible array member */
-} pointer_vector;
+} pVector;
 
-/* Returns the number of elements currently stored in the pointer_vector.
+/* Returns the number of elements currently stored in the pVector.
  *
  * Arguments:
- *   vec - The pointer_vector to query.
+ *   vec - The pVector to query.
  *
  * Return:
  *   The number of elements in the vector.
  *   Note that a NULL is a !!!valid!!! vector - returns 0 if the vector is NULL. */
-static inline uint32_t pv_len(pointer_vector *vec) {
+static inline uint32_t pvLen(pVector *vec) {
     return PV_LEN(vec);
 }
 
-/* Ensures that a pointer_vector has enough capacity to hold additional elements.
+/* Ensures that a pVector has enough capacity to hold additional elements.
  *
- * This function guarantees that the given pointer_vector `sv` has at least enough
- * allocated space to accommodate `capacity` more elements, growing it if necessary.
+ * This function guarantees that the given pVector `sv` has at least enough
+ * allocated space to accommodate `additional` more elements, growing it if necessary.
  * If the vector is currently `NULL`, it will be newly allocated.
  *
  * The allocation is handled using `zmalloc` or `zrealloc_usable`, depending on whether
@@ -51,19 +52,19 @@ static inline uint32_t pv_len(pointer_vector *vec) {
  * reflect the actual allocated size.
  *
  * Arguments:
- *   sv       - Pointer to an existing pointer_vector or NULL.
- *   capacity - The number of additional elements the vector should be able to accommodate.
+ *   sv       - Pointer to an existing pVector or NULL.
+ *   additional - The number of additional elements the vector should be able to accommodate.
  *
  * Return:
- *   A pointer to the resized (or newly allocated) pointer_vector with sufficient capacity.
+ *   A pointer to the resized (or newly allocated) pVector with sufficient capacity.
  *   Returns NULL only if the allocation fails.
  *
  * Note:
- *   The `capacity` is the number of *additional* elements beyond the current length.
+ *   The `additional` is the number of *additional* elements beyond the current length.
  *   This function does not modify the vector's logical length (`len`), only its allocation. */
-pointer_vector *pv_grow_to_fit(pointer_vector *sv, size_t capacity) {
-    if (capacity == 0) return sv;
-    size_t required = PV_HEADER_SIZE + (PV_LEN(sv) + capacity) * PV_ELEM_SIZE;
+pVector *pvMakeRoomFor(pVector *sv, size_t additional) {
+    if (additional == 0) return sv;
+    size_t required = PV_HEADER_SIZE + (PV_LEN(sv) + additional) * PV_ELEM_SIZE;
     if (PV_ALLOC(sv) >= required) return sv;
 
     if (!sv) {
@@ -76,10 +77,10 @@ pointer_vector *pv_grow_to_fit(pointer_vector *sv, size_t capacity) {
     return sv;
 }
 
-/* Shrinks a pointer_vector to release unused allocated memory.
+/* Shrinks a pVector to release unused allocated memory.
  *
  * This function checks if the current allocation (`used`) for the given
- * `pointer_vector` exceeds the memory actually required to store its elements.
+ * `pVector` exceeds the memory actually required to store its elements.
  * If so, it reallocates the vector to use only the needed memory, helping reduce
  * memory overhead and improve space efficiency.
  *
@@ -88,10 +89,10 @@ pointer_vector *pv_grow_to_fit(pointer_vector *sv, size_t capacity) {
  * size (`alloc`) to reflect the new length.
  *
  * Arguments:
- *  sv - A pointer to the `pointer_vector` to shrink.
+ *  sv - A pointer to the `pVector` to shrink.
  *
  * Return:
- *  A potentially reallocated `pointer_vector` with minimized memory usage,
+ *  A potentially reallocated `pVector` with minimized memory usage,
  *         or `NULL` if the input was `NULL`.
  *
  *  This function does not change the logical contents of the vector.
@@ -99,14 +100,14 @@ pointer_vector *pv_grow_to_fit(pointer_vector *sv, size_t capacity) {
  *  is needed, the original pointer is returned unchanged.
  *
  * Example:
- *     pointer_vector *vec = pv_new();
+ *     pVector *vec = pvNew();
  *     // After some insertions and deletions
- *     vec = pv_shrink_to_fit(vec); */
-pointer_vector *pv_shrink_to_fit(pointer_vector *sv) {
+ *     vec = pvShrinkToFit(vec); */
+pVector *pvShrinkToFit(pVector *sv) {
     if (!sv) return NULL;
 
     size_t used = PV_ALLOC(sv);
-    size_t required = pv_len(sv) == 0 ? 0 : PV_HEADER_SIZE + pv_len(sv) * PV_ELEM_SIZE;
+    size_t required = pvLen(sv) == 0 ? 0 : PV_HEADER_SIZE + pvLen(sv) * PV_ELEM_SIZE;
 
     if (used > required) {
         if (!required) {
@@ -120,10 +121,10 @@ pointer_vector *pv_shrink_to_fit(pointer_vector *sv) {
 }
 
 /**
- * pv_split - Splits a pointer_vector into two parts at a given index.
+ * pvSplit - Splits a pVector into two parts at a given index.
  *
  * Arguments:
- * sv_ptr:       A pointer to the pointer_vector* to split. This pointer is
+ * sv_ptr:       A pointer to the pVector* to split. This pointer is
  *                updated in-place to point to the left portion (elements [0..split_index-1]).
  * split_index:  The index at which to split the vector. The resulting right
  *                vector will contain elements [split_index..len-1].
@@ -137,11 +138,11 @@ pointer_vector *pv_shrink_to_fit(pointer_vector *sv) {
  * The vector is assumed to be densely packed and its elements are of type `void*`.
  *
  * Memory is allocated for the new right vector using `zmalloc`, and the unused
- * portion of the original vector may be freed or shrunk via `pv_shrink_to_fit`
+ * portion of the original vector may be freed or shrunk via `pvShrinkToFit`
  * to optimize memory usage.
  *
  * Return:
- *   - A new pointer_vector containing the right split [split_index..len-1].
+ *   - A new pVector containing the right split [split_index..len-1].
  *   - `NULL` in the following cases:
  *       • The input vector is `NULL`.
  *       • The input vector has only 1 or fewer elements (nothing to split).
@@ -158,7 +159,7 @@ pointer_vector *pv_shrink_to_fit(pointer_vector *sv) {
  *     [A, B, C, D, E]
  *
  * Calling:
- *     pointer_vector *right = pv_split(&sv_ptr, 3);
+ *     pVector *right = pvSplit(&sv_ptr, 3);
  *
  * Results in:
  *     sv_ptr -> [A, B, C]
@@ -166,8 +167,8 @@ pointer_vector *pv_shrink_to_fit(pointer_vector *sv) {
  *
  * If the split_index is 5 (i.e. the end), the function returns NULL and the
  * original vector is unchanged. */
-pointer_vector *pv_split(pointer_vector **sv_ptr, uint32_t split_index) {
-    pointer_vector *sv = *sv_ptr;
+pVector *pvSplit(pVector **sv_ptr, uint32_t split_index) {
+    pVector *sv = *sv_ptr;
 
     // Handle edge cases: null or empty
     if (!sv || sv->len <= 1) return NULL;
@@ -181,9 +182,9 @@ pointer_vector *pv_split(pointer_vector **sv_ptr, uint32_t split_index) {
 
     // Allocate new vector for right part
     size_t item_bytes = sizeof(void *);
-    size_t total_bytes = sizeof(pointer_vector) + right_len * item_bytes;
+    size_t total_bytes = sizeof(pVector) + right_len * item_bytes;
     size_t new_alloc;
-    pointer_vector *right = zmalloc_usable(total_bytes, &new_alloc);
+    pVector *right = zmalloc_usable(total_bytes, &new_alloc);
     right->alloc = new_alloc;
     right->len = right_len;
 
@@ -192,46 +193,46 @@ pointer_vector *pv_split(pointer_vector **sv_ptr, uint32_t split_index) {
 
     // Shrink original vector
     sv->len = split_index;
-    *sv_ptr = pv_shrink_to_fit(sv); // Optional: shrink in-place to reduce memory
+    *sv_ptr = pvShrinkToFit(sv); // Optional: shrink in-place to reduce memory
 
     return right;
 }
 
-/* Creates a new pointer_vector with the specified initial capacity.
+/* Creates a new pVector with the specified initial capacity.
  *
- * This function initializes a new pointer_vector capable of holding at least
+ * This function initializes a new pVector capable of holding at least
  * `capacity` elements. Internally, it delegates allocation and setup to
- * `pv_grow_to_fit`, starting from a NULL vector.
+ * `pvMakeRoomFor`, starting from a NULL vector.
  *
  * Arguments:
  *   capacity - The initial number of elements the vector should be able to store.
  *
  * Return:
- *   A pointer to the newly allocated pointer_vector.
+ *   A pointer to the newly allocated pVector.
  *   Note that a NULL is a !!valid!! cector which size is zero.
  *
  * Note:
  *   The logical length (`len`) of the returned vector is initialized to 0.
  */
-pointer_vector *pv_new(uint32_t capacity) {
-    pointer_vector *new_vec = NULL;
-    return pv_grow_to_fit(new_vec, capacity);
+pVector *pvNew(uint32_t capacity) {
+    pVector *new_vec = NULL;
+    return pvMakeRoomFor(new_vec, capacity);
 }
 
-/* Inserts an element at the specified position in the pointer_vector.
+/* Inserts an element at the specified position in the pVector.
  *
  * Ensures enough capacity for the new element, shifts elements to make space,
  * and inserts the given element at the desired position.
  *
  * Arguments:
- *   sv   - The pointer_vector to insert into (can be NULL).
+ *   sv   - The pVector to insert into (can be NULL).
  *   elem - The pointer to be inserted.
  *   pos  - The index at which to insert the element (must be ≤ sv->len).
  *
  * Return:
- *   The updated pointer_vector with the element inserted. */
-pointer_vector *pv_insert(pointer_vector *sv, void *elem, uint32_t pos) {
-    sv = pv_grow_to_fit(sv, 1);
+ *   The updated pVector with the element inserted. */
+pVector *pvInsert(pVector *sv, void *elem, uint32_t pos) {
+    sv = pvMakeRoomFor(sv, 1);
 
     if (pos < sv->len) {
         memmove(&sv->data[pos + 1], &sv->data[pos], (sv->len - pos) * sizeof(void *));
@@ -242,19 +243,19 @@ pointer_vector *pv_insert(pointer_vector *sv, void *elem, uint32_t pos) {
     return sv;
 }
 
-/* Removes the element at the specified index from the pointer_vector.
+/* Removes the element at the specified index from the pVector.
  *
  * Shifts elements as necessary and optionally shrinks the vector if memory can be saved.
  * If this is the last element in the vector, the vector is freed and NULL is returned.
  *
  * Arguments:
- *   sv  - The pointer_vector to remove from.
+ *   sv  - The pVector to remove from.
  *   idx - The index of the element to remove (must be < sv->len).
  *
  * Return:
- *   The updated pointer_vector after removal.
+ *   The updated pVector after removal.
  *   Returns NULL if the last element was removed and the vector was freed. */
-pointer_vector *pv_removeAt(pointer_vector *sv, uint32_t idx) {
+pVector *pvRemoveAt(pVector *sv, uint32_t idx) {
     if (!sv || sv->len == 0) return sv;
     assert(idx < sv->len);
     if (sv->len == 1) {
@@ -264,59 +265,59 @@ pointer_vector *pv_removeAt(pointer_vector *sv, uint32_t idx) {
     } else if (idx < sv->len - 1UL)
         memmove(&sv->data[idx], &sv->data[idx + 1], (sv->len - idx - 1) * PV_ELEM_SIZE);
     sv->len--;
-    return pv_shrink_to_fit(sv);
+    return pvShrinkToFit(sv);
 }
 
-/* Removes the first matching element from the pointer_vector.
+/* Removes the first matching element from the pVector.
  *
  * Performs a linear search for the given pointer and removes the first match.
  * Updates the vector pointer in case a removal was done.
  *
  * Arguments:
- *   sv   - A pointer to the location of the pointer_vector to remove from.
+ *   sv   - A pointer to the location of the pVector to remove from.
  *   elem - The element pointer to match and remove.
  *
  * Return:
  *   true in case a removal was made, false otherwise */
-bool pv_remove(pointer_vector **psv, void *elem) {
-    pointer_vector *sv = *psv;
+bool pvRemove(pVector **psv, void *elem) {
+    pVector *sv = *psv;
     if (!sv || sv->len == 0) return false;
 
     for (uint32_t i = 0; i < sv->len; i++) {
         if (sv->data[i] == elem) {
-            *psv = pv_removeAt(sv, i);
+            *psv = pvRemoveAt(sv, i);
             return true;
         }
     }
     return false;
 }
 
-/* Retrieves the element at the specified index in the pointer_vector.
+/* Retrieves the element at the specified index in the pVector.
  *
  * Arguments:
- *   vec - The pointer_vector to retrieve from.
+ *   vec - The pVector to retrieve from.
  *   idx - The index of the element to access.
  *
  * Return:
  *   A pointer to the element at the given index.
  *   Returns NULL if the vector is NULL or the index is out of bounds. */
-void *pv_get(pointer_vector *vec, uint32_t idx) {
+void *pvGet(pVector *vec, uint32_t idx) {
     if (!vec || idx >= vec->len) return NULL;
     return vec->data[idx];
 }
 
-/* Frees the memory used by the pointer_vector.
+/* Frees the memory used by the pVector.
  *
  * Arguments:
- *   sv - The pointer_vector to free.
+ *   sv - The pVector to free.
  *
  * Return:
  *   None. */
-void pv_free(pointer_vector *sv) {
+void pvFree(pVector *sv) {
     if (sv) zfree(sv);
 }
 
-uint32_t pv_find(pointer_vector *sv, void *elem) {
+uint32_t pvFind(pVector *sv, void *elem) {
     if (!sv || sv->len == 0) return 0;
 
     for (uint32_t i = 0; i < sv->len; i++) {
@@ -327,7 +328,7 @@ uint32_t pv_find(pointer_vector *sv, void *elem) {
     return sv->len;
 }
 /*************************************************************************************************************
- *                                pointer_vector End
+ *                                pVector End
  *************************************************************************************************************/
 #define VSET_BUCKET_NONE -1      // matching the NULL case
 #define VSET_BUCKET_SINGLE 0x1UL // xx1 (assuming sds)
@@ -354,9 +355,9 @@ static inline void *vsetBucketRawPtr(vsetBucket *b) {
 }
 
 // Accessors with type assertions
-static inline pointer_vector *vsetBucketVector(vsetBucket *b) {
+static inline pVector *vsetBucketVector(vsetBucket *b) {
     assert(vsetBucketType(b) == VSET_BUCKET_VECTOR);
-    return (pointer_vector *)vsetBucketRawPtr(b);
+    return (pVector *)vsetBucketRawPtr(b);
 }
 
 static inline hashtable *vsetBucketHashtable(vsetBucket *b) {
@@ -379,7 +380,7 @@ static inline vsetBucket *vsetBucketSetType(vsetBucket *b, int type) {
     return (vsetBucket *)(p | (type & VSET_TAG_MASK));
 }
 
-static inline vsetBucket *vsetBucketSetVector(vsetBucket *b, pointer_vector *vec) {
+static inline vsetBucket *vsetBucketSetVector(vsetBucket *b, pVector *vec) {
     UNUSED(b);
     return vsetBucketSetType(vec, VSET_BUCKET_VECTOR);
 }
@@ -432,7 +433,7 @@ static inline long long decodeExpiryKey(unsigned char *key) {
     return res;
 }
 
-static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
+static inline size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
     long long bucket_ts = get_max_bucket_ts(expiry);
     long long be_ts = htonu64(bucket_ts);
     size_t size = sizeof(be_ts);
@@ -448,13 +449,13 @@ static size_t encodeNewExpiryBucketKey(unsigned char *key, long long expiry) {
  * elem Pointer to the element to insert
  * cmp Comparison function (like strcmp-style: <0, ==0, >0)
  * returns the insertion index (between 0 and sv->len) */
-uint32_t _find_insert_position(vset *set, vsetBucket *bucket, long long expiry) {
-    pointer_vector *sv = vsetBucketVector(bucket);
+static inline uint32_t findInsertPosition(vset *set, vsetBucket *bucket, long long expiry) {
+    pVector *pv = vsetBucketVector(bucket);
     uint32_t left = 0;
-    uint32_t right = pv_len(sv);
+    uint32_t right = pvLen(pv);
     while (left < right) {
         uint32_t mid = (left + right) / 2;
-        int res = EXPIRE_COMPARE(expiry, set->etypr->getExpiry(sv->data[mid]));
+        int res = EXPIRE_COMPARE(expiry, set->etypr->getExpiry(pv->data[mid]));
         if (res <= 0)
             right = mid;
         else
@@ -464,11 +465,11 @@ uint32_t _find_insert_position(vset *set, vsetBucket *bucket, long long expiry) 
     return left; // Final position to insert the element
 }
 
-/* _find_split_position - Find the optimal split index in a sorted pointer vector
+/* findSplitPosition - Find the optimal split index in a sorted pointer vector
  *  based on coarse (bucketed) expiry timestamps.
  * Arguments
  * set:    Pointer to the `vset` containing the element type and expiry logic.
- * bucket: Pointer to a `vsetBucket` holding a sorted `pointer_vector` of elements.
+ * bucket: Pointer to a `vsetBucket` holding a sorted `pVector` of elements.
  * split_ts: an optional pointer to a location to store the split timestamp, that is the position
  * belonging in the lower split vector with the largest expiration time.
  *
@@ -502,35 +503,33 @@ uint32_t _find_insert_position(vset *set, vsetBucket *bucket, long long expiry) 
  * And `get_bucket_ts()` maps them to:
  *     [1300, 1300, 1300, 5000, 5000]
  *
- * Then `_find_split_position(set, bucket)` returns 3, resulting in:
+ * Then `findSplitPosition(set, bucket)` returns 3, resulting in:
  *     First part:  [1234, 1235, 1236] (bucket 1300)
  *     Second part: [4567, 4568]       (bucket 5000)
  *
  * This guarantees that each vector contains elements with the same bucket timestamp,
  * and no value in the first part maps to the same or later bucket as the second part.
  */
-uint32_t _find_split_position(vset *set, vsetBucket *bucket, long long *split_ts_out) {
-    pointer_vector *sv = vsetBucketVector(bucket);
+static uint32_t findSplitPosition(vset *set, vsetBucket *bucket, long long *split_ts_out) {
+    pVector *pv = vsetBucketVector(bucket);
 
-    if (!sv || sv->len < 2) return sv->len;
-
-    if (!sv || sv->len < 2) return sv ? sv->len : 0;
+    if (!pv || pv->len < 2) return pv ? pv->len : 0;
 
     uint32_t left = 1;
-    uint32_t right = sv->len - 1;
-    uint32_t best_split = sv->len;
-    uint32_t mid_closest_to_center = sv->len / 2;
+    uint32_t right = pv->len - 1;
+    uint32_t best_split = pv->len;
+    uint32_t mid_closest_to_center = pv->len / 2;
     long long best_split_ts = 0;
 
     while (left <= right) {
         uint32_t mid = (left + right) / 2;
 
-        long long prev_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid - 1)));
-        long long curr_ts = get_bucket_ts(set->etypr->getExpiry(pv_get(sv, mid)));
+        long long prev_ts = get_bucket_ts(set->etypr->getExpiry(pvGet(pv, mid - 1)));
+        long long curr_ts = get_bucket_ts(set->etypr->getExpiry(pvGet(pv, mid)));
 
         if (prev_ts != curr_ts) {
             // Check if closer to center
-            if (best_split == sv->len ||
+            if (best_split == pv->len ||
                 abs((int)mid - (int)mid_closest_to_center) < abs((int)best_split - (int)mid_closest_to_center)) {
                 best_split = mid;
                 best_split_ts = prev_ts;
@@ -542,9 +541,9 @@ uint32_t _find_split_position(vset *set, vsetBucket *bucket, long long *split_ts
     }
 
     if (split_ts_out) {
-        *split_ts_out = best_split != sv->len
+        *split_ts_out = best_split != pv->len
                             ? best_split_ts
-                            : get_bucket_ts(set->etypr->getExpiry(pv_get(sv, sv->len - 1)));
+                            : get_bucket_ts(set->etypr->getExpiry(pvGet(pv, pv->len - 1)));
     }
 
     return best_split;
@@ -553,6 +552,49 @@ uint32_t _find_split_position(vset *set, vsetBucket *bucket, long long *split_ts
 
 #define VSET_BUCKET_KEY_LEN 8
 
+/* hash_pointer - Computes a high-quality 64-bit hash from a pointer value.
+ *
+ * This function is designed to produce a well-distributed hash from a memory
+ * pointer, avoiding the common pitfall of poor entropy due to pointer alignment.
+ * It uses a platform-dependent mixing strategy based on MurmurHash3 finalization
+ * constants, ensuring good avalanche behavior and low collision rates.
+ *
+ * For 32-bit systems:
+ *   The function uses a reduced MurmurHash3 32-bit finalizer:
+ *     - XORs and right shifts to mix higher-order bits into lower ones.
+ *     - Multiplies by large constants to further spread the bits.
+ *
+ *   Example transformation:
+ *       x ^= x >> 16;
+ *       x *= 0x85ebca6b;
+ *       x ^= x >> 13;
+ *       x *= 0xc2b2ae35;
+ *       x ^= x >> 16;
+ *
+ * For 64-bit systems:
+ *   The function uses MurmurHash3 64-bit finalizer constants:
+ *     - These constants are chosen to maximize bit diffusion and avoid hash clustering.
+ *     - This version benefits from the full 64-bit pointer space.
+ *
+ *   Example transformation:
+ *       x ^= x >> 33;
+ *       x *= 0xff51afd7ed558ccdULL;
+ *       x ^= x >> 33;
+ *       x *= 0xc4ceb9fe1a85ec53ULL;
+ *       x ^= x >> 33;
+ *
+ * Why this works:
+ *   - Pointers tend to have low entropy in their lower bits (due to alignment).
+ *   - A naive cast to integer leads to clustering and collisions in hash tables.
+ *   - This function performs fast and effective bit mixing to reduce collisions.
+ *   - Ideal for use in pointer-keyed hash tables, interning systems, or caches.
+ *
+ * Note:
+ *   - This is not a cryptographic hash. It is suitable for fast, internal use only.
+ *   - Returns a 64-bit hash value, even on 32-bit systems.
+ *
+ * Returns:
+ *   A 64-bit hash value derived from the input pointer. */
 static uint64_t hash_pointer(const void *ptr) {
     uintptr_t x = (uintptr_t)ptr;
 #if UINTPTR_MAX == 0xFFFFFFFF
@@ -614,7 +656,7 @@ static void freeVsetBucket(void *entry) {
         // No internal memory to free
         break;
     case VSET_BUCKET_VECTOR:
-        pv_free(vsetBucketVector(bucket));
+        pvFree(vsetBucketVector(bucket));
         break;
     case VSET_BUCKET_HT:
         hashtableRelease(vsetBucketHashtable(bucket));
@@ -623,7 +665,7 @@ static void freeVsetBucket(void *entry) {
         raxFreeWithCallback(vsetBucketRax(bucket), freeVsetBucket);
         break;
     default:
-        serverPanic("Unknown volatile set type in freeVsetBucket");
+        panic("Unknown volatile set type in freeVsetBucket");
     }
 }
 
@@ -636,28 +678,28 @@ static bool splitBucketIfPossible(vset *set, vsetBucket *bucket, long long bucke
     long long target_bucket_ts = bucket_ts;
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     vsetBucket *new_bucket = NULL;
-    pointer_vector *sv = vsetBucketVector(bucket);
+    pVector *sv = vsetBucketVector(bucket);
     rax *expiry_buckets = vsetBucketRax(set->expiry_buckets);
-    long long max_bucket_ts = get_bucket_ts(set->etypr->getExpiry(sv->data[pv_len(sv) - 1]));
+    long long max_bucket_ts = get_bucket_ts(set->etypr->getExpiry(sv->data[pvLen(sv) - 1]));
     long long min_bucket_ts = get_bucket_ts(set->etypr->getExpiry(sv->data[0]));
 
     if (max_bucket_ts < bucket_ts) {
         /* In case the bucket is already spanning over a larger window than needed, just place the bucket in a new place */
         key_len = encodeExpiryKey(bucket_ts, key);
-        serverAssert(raxRemove(expiry_buckets, key, key_len, (void **)&new_bucket));
-        serverAssert(new_bucket == bucket);
+        assert(raxRemove(expiry_buckets, key, key_len, (void **)&new_bucket));
+        assert(new_bucket == bucket);
         target_bucket_ts = max_bucket_ts;
 
     } else if (min_bucket_ts != max_bucket_ts) {
         /* lets split the bucket. we know we can do it. */
-        uint32_t split_index = _find_split_position(set, bucket, &target_bucket_ts);
+        uint32_t split_index = findSplitPosition(set, bucket, &target_bucket_ts);
         assert(target_bucket_ts < bucket_ts);
-        assert(split_index != pv_len(sv)); /* no way to split it ???  */
-        pointer_vector *new_bucket_vector = vsetBucketVector(bucket);
-        bucket = vsetBucketSetVector(bucket, pv_split(&new_bucket_vector, split_index));
+        assert(split_index != pvLen(sv)); /* no way to split it ???  */
+        pVector *new_bucket_vector = vsetBucketVector(bucket);
+        bucket = vsetBucketSetVector(bucket, pvSplit(&new_bucket_vector, split_index));
         new_bucket = vsetBucketSetVector(new_bucket, new_bucket_vector);
-        assert(pv_len(vsetBucketVector(new_bucket)) > 0);
-        assert(pv_len(vsetBucketVector(bucket)) > 0);
+        assert(pvLen(vsetBucketVector(new_bucket)) > 0);
+        assert(pvLen(vsetBucketVector(bucket)) > 0);
         /* modify the current bucket data pointer */
         key_len = encodeExpiryKey(bucket_ts, key);
         /* In order to avoid rax override, we directly change the node data */
@@ -682,37 +724,37 @@ static inline vsetBucket *insertToBucket_NONE(vset *set, vsetBucket *bucket, voi
 
 static inline vsetBucket *insertToBucket_SINGLE(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
     /* Upgrade to vector */
-    pointer_vector *sv = pv_new(2);
+    pVector *sv = pvNew(2);
     void *curr_entry = vsetBucketSingle(bucket);
     long long curr_expiry = set->etypr->getExpiry(curr_entry);
     if (curr_expiry < expiry) {
-        sv = pv_insert(sv, curr_entry, 0);
-        sv = pv_insert(sv, entry, 1);
+        sv = pvInsert(sv, curr_entry, 0);
+        sv = pvInsert(sv, entry, 1);
     } else {
-        sv = pv_insert(sv, entry, 0);
-        sv = pv_insert(sv, curr_entry, 1);
+        sv = pvInsert(sv, entry, 0);
+        sv = pvInsert(sv, curr_entry, 1);
     }
     bucket = vsetBucketSetVector(bucket, sv);
     return bucket;
 }
 
 static inline vsetBucket *insertToBucket_VECTOR(vset *set, vsetBucket *bucket, void *entry, long long expiry) {
-    pointer_vector *pv = vsetBucketVector(bucket);
+    pVector *pv = vsetBucketVector(bucket);
     /* limit of the number of elements in a vector. */
-    if (pv_len(pv) >= VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
+    if (pvLen(pv) >= VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
         //  Upgrade to hashtable
         hashtable *ht = hashtableCreate(&pointerHashtableType);
-        for (uint32_t i = 0; i < pv_len(pv); i++) {
-            hashtableAdd(ht, pv_get(pv, i));
+        for (uint32_t i = 0; i < pvLen(pv); i++) {
+            hashtableAdd(ht, pvGet(pv, i));
         }
-        pv_free(pv);
+        pvFree(pv);
         /* Add the new entry as well */
         hashtableAdd(ht, entry);
 
         return vsetBucketSetHashtable(bucket, ht);
     } else {
-        uint32_t pos = _find_insert_position(set, bucket, expiry);
-        return vsetBucketSetVector(bucket, pv_insert(pv, entry, pos));
+        uint32_t pos = findInsertPosition(set, bucket, expiry);
+        return vsetBucketSetVector(bucket, pvInsert(pv, entry, pos));
     }
     return NULL;
 }
@@ -749,8 +791,8 @@ static inline vsetBucket *insertToBucket_RAX(vset *set, vsetBucket *target, void
         // alternative: raxInsert(expiry_buckets, key, key_len, bucket, NULL);
         raxSetData(node, bucket);
     } else if (type == VSET_BUCKET_VECTOR) {
-        pointer_vector *sv = vsetBucketVector(bucket);
-        if (pv_len(sv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
+        pVector *sv = vsetBucketVector(bucket);
+        if (pvLen(sv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(set, bucket, bucket_ts, node)) {
                 /* Can't split? insrt to the vector anyway, it will just expand to hashtable */
@@ -773,7 +815,7 @@ static inline vsetBucket *insertToBucket_RAX(vset *set, vsetBucket *target, void
     } else if (vsetBucketType(bucket) == VSET_BUCKET_HT) {
         bucket = insertToBucket_HASHTABLE(set, bucket, entry, expiry);
     } else {
-        serverPanic("Unknown bucket type in insertToBucket_RAX");
+        panic("Unknown bucket type in insertToBucket_RAX");
     }
     return target;
 }
@@ -797,24 +839,24 @@ static inline vsetBucket *removeFromBucket_VECTOR(vset *set, vsetBucket *bucket,
 
     vsetBucket *new_bucket = bucket;
     bool success = false;
-    pointer_vector *sv = vsetBucketVector(bucket);
+    pVector *sv = vsetBucketVector(bucket);
     /* In case we we removed the entry */
-    uint32_t vlen = pv_len(sv);
+    uint32_t vlen = pvLen(sv);
     if (vlen <= 2) {
         /* convert to single if needed */
-        uint32_t idx = pv_find(sv, entry);
+        uint32_t idx = pvFind(sv, entry);
         if (idx == vlen) {
             success = false;
         } else {
             if (vlen == 1)
                 new_bucket = vsetBucketSetNone(bucket);
             else
-                new_bucket = vsetBucketSetSingle(bucket, pv_get(sv, idx == 0 ? 1 : 0));
+                new_bucket = vsetBucketSetSingle(bucket, pvGet(sv, idx == 0 ? 1 : 0));
             success = true;
-            pv_free(sv);
+            pvFree(sv);
         }
     } else {
-        if (pv_remove(&sv, entry)) {
+        if (pvRemove(&sv, entry)) {
             success = true;
             new_bucket = vsetBucketSetVector(bucket, sv);
         }
@@ -847,12 +889,12 @@ static inline vsetBucket *removeFromBucket_HASHTABLE(vset *set, vsetBucket *buck
     return new_bucket;
 }
 
-static int vsetBucketNext_NONE(volatileSetIterator *it, void **entryptr) {
+static int vsetBucketNext_NONE(vsetIterator *it, void **entryptr) {
     UNUSED(it);
     UNUSED(entryptr);
     return 0;
 }
-static inline int vsetBucketNext_SINGLE(volatileSetIterator *it, void **entryptr) {
+static inline int vsetBucketNext_SINGLE(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
     if (init_bucket_scan) {
         it->iteration_state = VSET_BUCKET_SINGLE;
@@ -862,17 +904,17 @@ static inline int vsetBucketNext_SINGLE(volatileSetIterator *it, void **entryptr
     }
     return 0;
 }
-static inline int vsetBucketNext_VECTOR(volatileSetIterator *it, void **entryptr) {
+static inline int vsetBucketNext_VECTOR(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
-    pointer_vector *pv = vsetBucketVector(it->bucket);
+    pVector *pv = vsetBucketVector(it->bucket);
     if (init_bucket_scan) {
         it->iteration_state = VSET_BUCKET_VECTOR;
         it->viter = 0;
     } else {
         it->viter++;
     }
-    if (it->viter < pv_len(pv)) {
-        it->entry = pv_get(pv, it->viter);
+    if (it->viter < pvLen(pv)) {
+        it->entry = pvGet(pv, it->viter);
     } else {
         return 0;
     }
@@ -880,7 +922,7 @@ static inline int vsetBucketNext_VECTOR(volatileSetIterator *it, void **entryptr
     return 1;
 }
 
-static inline int vsetBucketNext_HASHTABLE(volatileSetIterator *it, void **entryptr) {
+static inline int vsetBucketNext_HASHTABLE(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
     hashtable *ht = vsetBucketHashtable(it->bucket);
     if (init_bucket_scan) {
@@ -895,7 +937,7 @@ static inline int vsetBucketNext_HASHTABLE(volatileSetIterator *it, void **entry
     return 1;
 }
 
-static inline int vsetBucketNext_RAX(volatileSetIterator *it, void **entryptr) {
+static inline int vsetBucketNext_RAX(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
     if (init_bucket_scan) {
         /* set myself as the parent bucket */
@@ -909,7 +951,7 @@ static inline int vsetBucketNext_RAX(volatileSetIterator *it, void **entryptr) {
         it->bucket_ts = decodeExpiryKey(it->riter.key);
         it->bucket = it->riter.data;
         it->iteration_state = VSET_BUCKET_NONE;
-        return volatileSetNext(it, entryptr);
+        return vsetNext(it, entryptr);
     } else {
         /* We currently do not support nested RAX buckets */
         it->parent_bucket = vsetBucketSetNone(it->parent_bucket);
@@ -954,7 +996,7 @@ static bool raxBucketRemoveEntry(vset *set, void *entry, vsetBucket *bucket, uns
         break;
     }
     default:
-        serverPanic("Unknown bucket type for raxBucketRemoveEntry");
+        panic("Unknown bucket type for raxBucketRemoveEntry");
         return false;
     }
     return removed;
@@ -982,7 +1024,7 @@ static inline vsetBucket *removeFromBucket_RAX(vset *set, vsetBucket *target, vo
         /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
          * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
         if (bucket_type == VSET_BUCKET_SINGLE ||
-            (bucket_type == VSET_BUCKET_VECTOR && pv_len(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
+            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
             /* lets make our bucket to be the only left bucket */
             target = bucket;
             raxFree(expiry_buckets);
@@ -991,7 +1033,7 @@ static inline vsetBucket *removeFromBucket_RAX(vset *set, vsetBucket *target, vo
     return target;
 }
 
-int volatileSetAddEntry(vset *set, void *entry, long long expiry) {
+int vsetAddEntry(vset *set, void *entry, long long expiry) {
     int bucket_type = vsetBucketType(set->expiry_buckets);
     switch (bucket_type) {
     case VSET_BUCKET_NONE:
@@ -1001,13 +1043,13 @@ int volatileSetAddEntry(vset *set, void *entry, long long expiry) {
         set->expiry_buckets = insertToBucket_SINGLE(set, set->expiry_buckets, entry, expiry);
         break;
     case VSET_BUCKET_VECTOR: {
-        pointer_vector *vec = vsetBucketVector(set->expiry_buckets);
-        uint32_t len = pv_len(vec);
+        pVector *vec = vsetBucketVector(set->expiry_buckets);
+        uint32_t len = pvLen(vec);
         /* in case the vector is full, we need to turn into RAX */
         if (len == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
             rax *r = raxNew();
-            long long min_expiry = set->etypr->getExpiry(pv_get(vec, 0));
-            long long max_expiry = set->etypr->getExpiry(pv_get(vec, len - 1));
+            long long min_expiry = set->etypr->getExpiry(pvGet(vec, 0));
+            long long max_expiry = set->etypr->getExpiry(pvGet(vec, len - 1));
             if (get_max_bucket_ts(min_expiry) == get_max_bucket_ts(max_expiry)) {
                 /* In case we can just insert the bucket, no need to iterate and insert it's elements. we can just push the bucket as a whole. */
                 unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
@@ -1019,11 +1061,11 @@ int volatileSetAddEntry(vset *set, void *entry, long long expiry) {
                 /* We need to migrate entries to the new set of buckets since we do not know all entries are in the same bucket */
                 set->expiry_buckets = vsetBucketSetRax(set->expiry_buckets, r);
                 for (uint32_t i = 0; i < len; i++) {
-                    void *moved_entry = pv_get(vec, i);
+                    void *moved_entry = pvGet(vec, i);
                     set->expiry_buckets = insertToBucket_RAX(set, set->expiry_buckets, moved_entry, set->etypr->getExpiry(moved_entry));
                 }
                 /* free the vector */
-                pv_free(vec);
+                pvFree(vec);
                 /* now insert the new entry to the buckets */
                 set->expiry_buckets = insertToBucket_RAX(set, set->expiry_buckets, entry, expiry);
             }
@@ -1036,12 +1078,12 @@ int volatileSetAddEntry(vset *set, void *entry, long long expiry) {
         set->expiry_buckets = insertToBucket_RAX(set, set->expiry_buckets, entry, expiry);
         break;
     default:
-        serverPanic("Cannot insert to bucket which is not single, vector or rax");
+        panic("Cannot insert to bucket which is not single, vector or rax");
     }
     return 1;
 }
 
-int volatileSetRemoveEntry(vset *set, void *entry, long long expiry) {
+int vsetRemoveEntry(vset *set, void *entry, long long expiry) {
     bool removed;
     vsetBucket *bucket = set->expiry_buckets;
     int bucket_type = vsetBucketType(bucket);
@@ -1062,26 +1104,26 @@ int volatileSetRemoveEntry(vset *set, void *entry, long long expiry) {
         bucket = removeFromBucket_RAX(set, bucket, entry, expiry, &removed);
         break;
     default:
-        serverPanic("Cannot insert to bucket which is not single, vector or rax");
+        panic("Cannot insert to bucket which is not single, vector or rax");
     }
     set->expiry_buckets = bucket;
     return removed ? 1 : 0;
 }
 
-int volatileSetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+int vsetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     if (old_entry == new_entry && old_expiry == new_expiry)
         return 1;
 
     if (old_entry && old_expiry != -1)
-        assert((volatileSetRemoveEntry(set, old_entry, old_expiry)));
+        assert((vsetRemoveEntry(set, old_entry, old_expiry)));
 
     if (new_entry && new_expiry != -1)
-        assert(volatileSetAddEntry(set, new_entry, new_expiry));
+        assert(vsetAddEntry(set, new_entry, new_expiry));
 
     return 1;
 }
 
-static void *volatileSetGetFirstExpired(vset *set, mstime_t now, bool delete) {
+static void *vsetGetFirstExpired(vset *set, mstime_t now, bool delete) {
     int set_type = vsetBucketType(set->expiry_buckets);
     void *entry = NULL;
     long long expiry;
@@ -1090,11 +1132,11 @@ static void *volatileSetGetFirstExpired(vset *set, mstime_t now, bool delete) {
         return NULL;
         break;
     case VSET_BUCKET_RAX: {
-        volatileSetIterator iter;
-        volatileSetStart(set, &iter);
+        vsetIterator iter;
+        vsetStart(set, &iter);
         assert(vsetBucketNext_RAX(&iter, &entry));
         long long bucket_ts = iter.bucket_ts;
-        volatileSetReset(&iter);
+        vsetStop(&iter);
         if (bucket_ts > now)
             return NULL;
         expiry = set->etypr->getExpiry(entry);
@@ -1109,7 +1151,7 @@ static void *volatileSetGetFirstExpired(vset *set, mstime_t now, bool delete) {
         break;
     }
     case VSET_BUCKET_VECTOR: {
-        entry = pv_get(vsetBucketVector(set->expiry_buckets), 0);
+        entry = pvGet(vsetBucketVector(set->expiry_buckets), 0);
         expiry = set->etypr->getExpiry(entry);
         if (expiry > now)
             return NULL;
@@ -1126,22 +1168,22 @@ static void *volatileSetGetFirstExpired(vset *set, mstime_t now, bool delete) {
         break;
     }
     default:
-        serverPanic("Unknown volatile set bucket type in volatileSetNext");
+        panic("Unknown volatile set bucket type in vsetNext");
     }
     if (delete)
-        assert(volatileSetRemoveEntry(set, entry, expiry));
+        assert(vsetRemoveEntry(set, entry, expiry));
     return entry;
 }
 
-void *volatileSetdPopExpired(vset *set, mstime_t now) {
-    return volatileSetGetFirstExpired(set, now, true);
+void *vsetPopExpired(vset *set, mstime_t now) {
+    return vsetGetFirstExpired(set, now, true);
 }
 
-void *volatileSetFirstExpired(vset *set, mstime_t now) {
-    return volatileSetGetFirstExpired(set, now, false);
+void *vsetFirstExpired(vset *set, mstime_t now) {
+    return vsetGetFirstExpired(set, now, false);
 }
 
-int volatileSetNext(volatileSetIterator *it, void **entryptr) {
+int vsetNext(vsetIterator *it, void **entryptr) {
     vsetBucket *bucket = it->bucket;
     int bucket_type = vsetBucketType(bucket);
     int ret = 0;
@@ -1162,25 +1204,25 @@ int volatileSetNext(volatileSetIterator *it, void **entryptr) {
         ret = vsetBucketNext_HASHTABLE(it, entryptr);
         break;
     default:
-        serverPanic("Unknown volatile set bucket type in volatileSetNext");
+        panic("Unknown volatile set bucket type in vsetNext");
     }
     if (ret == 0) {
         /* continue iterating the parent bucket */
         it->iteration_state = vsetBucketType(it->parent_bucket);
         it->bucket = it->parent_bucket;
-        return volatileSetNext(it, entryptr);
+        return vsetNext(it, entryptr);
     }
     return ret;
 }
 
-void volatileSetStart(vset *set, volatileSetIterator *it) {
+void vsetStart(vset *set, vsetIterator *it) {
     it->iteration_state = VSET_BUCKET_NONE; /*lets start by going to the first bucket. */
     it->bucket = set->expiry_buckets;
     it->bucket_ts = -1;
     it->parent_bucket = vsetBucketSetNone(it->parent_bucket);
 }
 
-void volatileSetReset(volatileSetIterator *it) {
+void vsetStop(vsetIterator *it) {
     int bucket_type = vsetBucketType(it->bucket);
     int parent_bucket_type = vsetBucketType(it->parent_bucket);
     if (parent_bucket_type == VSET_BUCKET_RAX)
@@ -1202,6 +1244,6 @@ void freeVolatileSet(vset *set) {
     zfree(set);
 }
 
-bool volatileSetIsEmpty(vset *set) {
+bool vsetIsEmpty(vset *set) {
     return vsetBucketType(set->expiry_buckets) == VSET_BUCKET_NONE;
 }

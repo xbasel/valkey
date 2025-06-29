@@ -2597,7 +2597,7 @@ typedef struct {
     unsigned char *fptr, *vptr;
 
     hashtableIterator iter;
-    volatileSetIterator viter;
+    vsetIterator viter;
     void *next;
 
 } hashTypeIterator;

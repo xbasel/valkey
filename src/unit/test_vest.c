@@ -62,24 +62,24 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
     mock_entry *e1 = mockCreateEntry("item1", 123);
     mock_entry *e2 = mockCreateEntry("item2", 456);
 
-    TEST_ASSERT(volatileSetAddEntry(set, e1, mockGetExpiry(e1)));
-    TEST_ASSERT(volatileSetAddEntry(set, e2, mockGetExpiry(e2)));
+    TEST_ASSERT(vsetAddEntry(set, e1, mockGetExpiry(e1)));
+    TEST_ASSERT(vsetAddEntry(set, e2, mockGetExpiry(e2)));
 
-    TEST_ASSERT(!volatileSetIsEmpty(set));
+    TEST_ASSERT(!vsetIsEmpty(set));
 
-    volatileSetIterator it;
-    volatileSetStart(set, &it);
+    vsetIterator it;
+    vsetStart(set, &it);
 
     void *entry;
     int count = 0;
-    while (volatileSetNext(&it, &entry)) {
+    while (vsetNext(&it, &entry)) {
         TEST_EXPECT(entry != NULL);
         count++;
     }
 
     TEST_ASSERT(count == 2);
 
-    volatileSetReset(&it);
+    vsetStop(&it);
     freeVolatileSet(set);
     mockFreeEntry(e1);
     mockFreeEntry(e2);
@@ -114,26 +114,26 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
         char key_buf[32];
         snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
         entries[i] = mockCreateEntry(key_buf, expiry_time);
-        TEST_ASSERT(volatileSetAddEntry(set, entries[i], expiry_time));
+        TEST_ASSERT(vsetAddEntry(set, entries[i], expiry_time));
     }
 
     // Verify set is not empty
-    TEST_ASSERT(!volatileSetIsEmpty(set));
+    TEST_ASSERT(!vsetIsEmpty(set));
 
     // Iterate all entries and count them
-    volatileSetIterator it;
-    volatileSetStart(set, &it);
+    vsetIterator it;
+    vsetStart(set, &it);
 
     void *entry;
     int count = 0;
-    while (volatileSetNext(&it, &entry)) {
+    while (vsetNext(&it, &entry)) {
         TEST_EXPECT(entry != NULL);
         count++;
     }
     TEST_ASSERT(count == total_entries);
 
     // Cleanup
-    volatileSetReset(&it);
+    vsetStop(&it);
     freeVolatileSet(set);
 
     for (int i = 0; i < total_entries; i++) {
@@ -169,17 +169,17 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
         snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
         long long expiry_time = rand() % 10000;
         entries[i] = mockCreateEntry(key_buf, expiry_time);
-        TEST_ASSERT(volatileSetAddEntry(set, entries[i], expiry_time));
+        TEST_ASSERT(vsetAddEntry(set, entries[i], expiry_time));
     }
 
-    volatileSetIterator it;
-    volatileSetStart(set, &it);
+    vsetIterator it;
+    vsetStart(set, &it);
 
     int found[5] = {0};
     int total = 0;
 
     void *entry;
-    while (volatileSetNext(&it, &entry)) {
+    while (vsetNext(&it, &entry)) {
         TEST_EXPECT(entry != NULL);
         mock_entry *e = (mock_entry *)entry;
 
@@ -199,7 +199,7 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
         TEST_EXPECT(found[i]);
     }
 
-    volatileSetReset(&it);
+    vsetStop(&it);
     freeVolatileSet(set);
     for (int i = 0; i < 5; i++) mockFreeEntry(entries[i]);
 
@@ -229,15 +229,15 @@ int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
         char key[32];
         snprintf(key, sizeof(key), "key_%d", i);
         entries[i] = mockCreateEntry(key, expiry);
-        TEST_ASSERT(volatileSetAddEntry(set, entries[i], expiry));
+        TEST_ASSERT(vsetAddEntry(set, entries[i], expiry));
     }
 
     for (int i = 0; i < total_entries; i++) {
-        TEST_ASSERT(volatileSetRemoveEntry(set, entries[i], expiry));
+        TEST_ASSERT(vsetRemoveEntry(set, entries[i], expiry));
         mockFreeEntry(entries[i]);
     }
 
-    TEST_ASSERT(volatileSetIsEmpty(set));
+    TEST_ASSERT(vsetIsEmpty(set));
     freeVolatileSet(set);
 
     TEST_PRINT_INFO("Add/remove %d entries, set size now 0", total_entries);
@@ -290,7 +290,7 @@ int insert_mock_entry(vset *set) {
     long long expiry = rand() % 10000 + 100;
     mock_entry *e = mock_entry_create(keybuf, expiry);
     // printf("adding entry %p with expiry %llu\n", e, expiry);
-    TEST_ASSERT(volatileSetAddEntry(set, e, expiry));
+    TEST_ASSERT(vsetAddEntry(set, e, expiry));
     mock_entries[mock_entry_count++] = e;
     return 0;
 }
@@ -304,7 +304,7 @@ int update_mock_entry(vset *set) {
     mock_entry *updated = mockEntryUpdate(old, new_expiry);
     mock_entries[idx] = updated;
     // printf("Update entry %p with entry %p with old expiry %llu new expiry %llu\n", old, updated, old_expiry, new_expiry);
-    TEST_ASSERT(volatileSetUpdateEntry(set, old, updated, old_expiry, new_expiry));
+    TEST_ASSERT(vsetUpdateEntry(set, old, updated, old_expiry, new_expiry));
     return 0;
 }
 
@@ -313,7 +313,7 @@ int remove_mock_entry(vset *set) {
     int idx = rand() % mock_entry_count;
     mock_entry *e = mock_entries[idx];
     // printf("removing entry %p with expiry %llu\n", e, mockGetExpiry(e));
-    TEST_ASSERT(volatileSetRemoveEntry(set, e, mockGetExpiry(e)));
+    TEST_ASSERT(vsetRemoveEntry(set, e, mockGetExpiry(e)));
     mockFreeEntry(e);
     mock_entries[idx] = mock_entries[--mock_entry_count];
 
@@ -323,7 +323,7 @@ int remove_mock_entry(vset *set) {
 int expire_mock_entries(vset *set, mstime_t now) {
     void *entry;
     do {
-        entry = volatileSetdPopExpired(set, now);
+        entry = vsetPopExpired(set, now);
         if (entry) {
             // printf("pop expire entry %p with expiry %llu now: %llu\n", entry, mockGetExpiry(entry), now);
             TEST_ASSERT(mockGetExpiry(entry) <= now);
@@ -377,7 +377,7 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
     }
     /* now expire all the entries and check that we have no entries left */
     expire_mock_entries(set, LONG_LONG_MAX);
-    TEST_ASSERT(volatileSetIsEmpty(set) && mock_entry_count == 0);
+    TEST_ASSERT(vsetIsEmpty(set) && mock_entry_count == 0);
     freeVolatileSet(set);
     free_mock_entries(); /* Just in case */
     return 0;

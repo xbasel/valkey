@@ -64,20 +64,88 @@
  *      → it is promoted to a `VECTOR` bucket (sorted by expiry).
  * 3. If the `VECTOR` exceeds `VOLATILESET_VECTOR_BUCKET_MAX_SIZE` (127):
  *      → the set becomes a `RAX`, and existing entries are migrated.
+ * 4. IF the set is using RAX encoding it will locate a bucket to add the entry 
+ *    following the strategy explained below.
  *
  *-----------------------------------------------------------------------------
  * RAX Bucket and Dynamic Splitting
  *-----------------------------------------------------------------------------
  *
- * A `VSET_BUCKET_RAX` bucket stores multiple time-aligned buckets in a radix tree.
- * Each key in the RAX represents the **end timestamp** of a bucket window.
+ * Each bucket in the RAX bucket corresponds to a **time window**, defined by
+ * its bucket timestamp (`bucket_ts`). This timestamp represents the **END** of 
+ * the time window. Entries in the bucket must expire *before* this timestamp.
  *
- * When a bucket in RAX becomes full (vector limit exceeded):
- * - The vector is split into two parts using a **binary search** to find an optimal
- *   split point where the expiry bucket timestamp changes.
- * - Two new buckets are created and inserted back into the RAX with their new
- *   aligned timestamps as keys.
- * - If entries cannot be split (all in same window), the bucket is promoted to HT.
+ * Time windows are defined in granular ranges:
+ *   - Minimum granularity: VOLATILESET_BUCKET_INTERVAL_MIN (16 ms)
+ *   - Maximum granularity: VOLATILESET_BUCKET_INTERVAL_MAX (8192 ms)
+ *
+ * A bucket can only contain entries that:
+ *   1. Have expiry < bucket_ts
+ *   2. Do not fit into any bucket with a smaller timestamp (i.e., earlier window)
+ *
+ * The structure allows multiple encodings:
+ *     VSET_BUCKET_SINGLE  - A single pointer to one entry.
+ *     VSET_BUCKET_VECTOR  - A sorted vector of pointers (up to 127 entries).
+ *     VSET_BUCKET_HT      - A hashtable used when vectors become too dense.
+ *
+ * Bucket Timestamp (END of window):
+ *
+ *        |------------------ Bucket Span ------------------|
+ *        [window_start .................................. bucket_ts)
+ *
+ * ASCII Layout Example:
+ *
+ *   Timeline:             ---> increasing time --->
+ *                         +------+---------+--------+
+ *                         | B0   |   B1    |   B2   |
+ *                         | ts=32| ts=128  | ts=2048|
+ *                         +------+---------+--------+
+ *                         ^      ^         ^
+ *                         |      |         |
+ *               [E1,E2] ∈ B0   [E3...E7] ∈ B1    [E8...] ∈ B2
+ *               All entries expire BEFORE their bucket_ts
+ *
+ * Bucket Splitting Strategy:
+ * ----------------------------------
+ *
+ * When a bucket (e.g. VECTOR) becomes too dense or needs realignment:
+ *
+ * 1. **Re-align to lower granularity:**
+ *      - Adjust the bucket timestamp down to a finer granularity (e.g. 16ms).
+ *      - Only done if ALL entries still fit in the tighter window.
+ *      - Effectively “moves” the bucket to an earlier timestamp.
+ *
+ *        Example: B(ts=128, span=128ms) → B(ts=64, span=16ms)
+ *
+ * 2. **Split into two buckets:**
+ *      - Use binary search to find a “natural” boundary based on entry expiry.
+ *      - Original bucket retains its timestamp (but holds fewer entries).
+ *      - New bucket is inserted before the current one with its own tighter timestamp.
+ *
+ *        Example:
+ *
+ *        Before:
+ *             [ Entry0 ... Entry126 ]  → B(ts=128)
+ *
+ *        After Split:
+ *             [ Entry0...Entry62 ]     → New B(ts=64)
+ *             [ Entry63...Entry126 ]   → Original B(ts=128)
+ *
+ * 3. **Convert to hashtable:**
+ *      - When no clean split is found (e.g. all entries share similar expiry),
+ *        and realignment is not possible.
+ *      - This allows efficient O(1) lookups even with clustered expiry values.
+ *
+ *        Vector B(ts=128) → Hashtable B(ts=128)
+ *
+ * This hierarchical design ensures:
+ *   - Efficient memory usage (tight buckets)
+ *   - Predictable iteration by expiry time
+ *   - Low overhead insertions & deletions
+ *   - Graceful promotion & demotion of bucket types
+ *
+ * NOTE: Buckets are always sorted by their `bucket_ts` in the radix tree (RAX),
+ *       which allows efficient search for insertion/removal based on expiry.
  *
  *-----------------------------------------------------------------------------
  * RAX Bucket Layout
@@ -157,23 +225,23 @@
  *     void freeVolatileSet(vset *set);
  *
  * Mutation:
- *     int volatileSetAddEntry(vset *set, void *entry, long long expiry);
- *     int volatileSetRemoveEntry(vset *set, void *entry, long long expiry);
- *     int volatileSetUpdateEntry(vset *set, void *old_entry,
+ *     int vsetAddEntry(vset *set, void *entry, long long expiry);
+ *     int vsetRemoveEntry(vset *set, void *entry, long long expiry);
+ *     int vsetUpdateEntry(vset *set, void *old_entry,
  *                                void *new_entry, long long old_expiry,
  *                                long long new_expiry);
  *
  * Expiry Retrieval:
- *     void *volatileSetFirstExpired(vset *set, mstime_t now);
- *     void *volatileSetdPopExpired(vset *set, mstime_t now);
+ *     void *vsetFirstExpired(vset *set, mstime_t now);
+ *     void *vsetPopExpired(vset *set, mstime_t now);
  *
  * Utilities:
- *     bool volatileSetIsEmpty(vset *set);
+ *     bool vsetIsEmpty(vset *set);
  *
  * Iteration:
- *     void volatileSetStart(vset *set, volatileSetIterator *it);
- *     int volatileSetNext(volatileSetIterator *it, void **entryptr);
- *     void volatileSetReset(volatileSetIterator *it);
+ *     void vsetStart(vset *set, vsetIterator *it);
+ *     int vsetNext(vsetIterator *it, void **entryptr);
+ *     void vsetStop(vsetIterator *it);
  *
  *-----------------------------------------------------------------------------
  * Iteration Support
@@ -181,7 +249,7 @@
  *
  * Iterator structure maintains context across all bucket types:
  *
- *     typedef struct volatileSetIterator {
+ *     typedef struct vsetIterator {
  *         raxIterator riter;           // for RAX
  *         hashtableIterator hiter;     // for HT
  *         uint32_t viter;              // for VECTOR
@@ -191,7 +259,7 @@
  *         void *entry;                 // current entry
  *         long long bucket_ts;         // for RAX
  *         int iteration_state;         // internal FSM
- *     } volatileSetIterator;
+ *     } vsetIterator;
  * */
 
 #define VOLATILESET_BUCKET_INTERVAL_MAX (1LL << 13LL) // 2^13 = 8192 milliseconds
@@ -215,7 +283,7 @@ typedef struct {
     vsetBucket *expiry_buckets;
 } vset;
 
-typedef struct volatileSetIterator {
+typedef struct vsetIterator {
     /* for rax bucket */
     raxIterator riter;
     /* for hashtable bucket */
@@ -234,17 +302,17 @@ typedef struct volatileSetIterator {
     long long bucket_ts;
     /* the state of the iteration */
     int iteration_state; 
-} volatileSetIterator;
+} vsetIterator;
 
-int volatileSetRemoveEntry(vset *set, void *entry, long long expiry);
-int volatileSetAddEntry(vset *set, void *entry, long long expiry);
-void *volatileSetdPopExpired(vset *set, mstime_t now);
-void *volatileSetFirstExpired(vset *set, mstime_t now);
-int volatileSetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
-bool volatileSetIsEmpty(vset *set);
-void volatileSetStart(vset *set, volatileSetIterator *it);
-int volatileSetNext(volatileSetIterator *it, void **entryptr);
-void volatileSetReset(volatileSetIterator *it);
+int vsetRemoveEntry(vset *set, void *entry, long long expiry);
+int vsetAddEntry(vset *set, void *entry, long long expiry);
+void *vsetPopExpired(vset *set, mstime_t now);
+void *vsetFirstExpired(vset *set, mstime_t now);
+int vsetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+bool vsetIsEmpty(vset *set);
+void vsetStart(vset *set, vsetIterator *it);
+int vsetNext(vsetIterator *it, void **entryptr);
+void vsetStop(vsetIterator *it);
 void freeVolatileSet(vset *b);
 vset *createVolatileSet(volatileEntryType *type);
 

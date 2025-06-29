@@ -100,15 +100,15 @@ static void hashTypeDeleteVolatileSet(robj *o) {
 
 void hashTypeTrackEntry(robj *o, void *entry) {
     vset *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
+    serverAssert(vsetAddEntry(set, entry, entryGetExpiry(entry)));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
-    if (volatileSetIsEmpty(set)) {
+    serverAssert(vsetRemoveEntry(set, entry, entryGetExpiry(entry)));
+    if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
 }
@@ -124,15 +124,15 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     debugServerAssert(set);
 
     if (old_tracked && !new_tracked)
-        serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
+        serverAssert(vsetRemoveEntry(set, old_entry, old_expiry));
     else if (new_tracked && !old_tracked)
-        serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
+        serverAssert(vsetAddEntry(set, new_entry, new_expiry));
     else {
         vset *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
-        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
+        serverAssert(vsetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }
-    if (volatileSetIsEmpty(set)) {
+    if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
 }
@@ -584,7 +584,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         return;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        volatileSetStart(hashTypeGetVolatileSet(subject), &hi->viter);
+        vsetStart(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -595,7 +595,7 @@ void hashTypeResetIterator(hashTypeIterator *hi) {
         if (!hi->volatile_items_iter)
             hashtableResetIterator(&hi->iter);
         else
-            volatileSetReset(&hi->viter);
+            vsetStop(&hi->viter);
     }
 }
 
@@ -635,7 +635,7 @@ int hashTypeNext(hashTypeIterator *hi) {
         if (!hi->volatile_items_iter) {
             if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
         } else {
-            if (!volatileSetNext(&hi->viter, &hi->next)) return C_ERR;
+            if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
         }
     } else {
         serverPanic("Unknown hash encoding");
