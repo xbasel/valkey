@@ -280,9 +280,8 @@ typedef struct {
 // Generic bucket type
 typedef void vsetBucket;
 
-typedef struct {
-    vsetBucket *expiry_buckets;
-} vset;
+// vset is just a pointer to a bucket
+typedef vsetBucket* vset;
 
 typedef struct vsetIterator {
     /* for rax bucket */
@@ -315,7 +314,7 @@ void vsetStart(vset *set, vsetIterator *it);
 int vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void freeVolatileSet(vset *b);
-vset *createVolatileSet(void);
+vset *createVolatileSet(vset *set);
 
 
 #endif

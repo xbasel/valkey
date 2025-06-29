@@ -48,7 +48,7 @@
 
 static vset *hashTypeGetVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    return *(vset **)hashtableMetadata(o->ptr);
+    return (vset *)hashtableMetadata(o->ptr);
 }
 
 void hashTypeFreeVolatileSet(robj *o) {
@@ -75,19 +75,18 @@ void hashTypeIgnoreTTL(robj *o, bool ignore) {
 
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    vset **vset_ref = hashtableMetadata(o->ptr);
-    if (*vset_ref == NULL) {
-        *vset_ref = createVolatileSet();
+    vset *vset = hashtableMetadata(o->ptr);
+    if (*vset == NULL) {
+        createVolatileSet(vset);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
         hashTypeIgnoreTTL(o, false);
     }
-    return *vset_ref;
+    return vset;
 }
 
 static void hashTypeDeleteVolatileSet(robj *o) {
-    vset **vset_ref = hashtableMetadata(o->ptr);
-    freeVolatileSet(*vset_ref);
-    *vset_ref = NULL;
+    vset *vset = hashtableMetadata(o->ptr);
+    freeVolatileSet(vset);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
     hashTypeIgnoreTTL(o, true);
 }
@@ -115,15 +114,13 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
         return;
 
     vset *set = hashTypeGetOrcreateVolatileSet(o);
-    debugServerAssert(set);
+    debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
     if (old_tracked && !new_tracked)
         serverAssert(vsetRemoveEntry(set, entryGetExpiry, old_entry, old_expiry));
     else if (new_tracked && !old_tracked)
         serverAssert(vsetAddEntry(set, entryGetExpiry, new_entry, new_expiry));
     else {
-        vset *set = hashTypeGetVolatileSet(o);
-        debugServerAssert(set);
         serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }
     if (vsetIsEmpty(set)) {
