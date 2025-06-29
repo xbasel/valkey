@@ -45,7 +45,6 @@ static int mockExpire(void *db, void *o, void *entry) {
 }
 
 int test_vset_add_and_iterate(int argc, char **argv, int flags) {
-    return 0;
     (void)argc;
     (void)argv;
     (void)flags;
@@ -89,7 +88,6 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
 }
 
 int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
-    return 0;
     (void)argc;
     (void)argv;
     (void)flags;
@@ -146,7 +144,6 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
 }
 
 int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
-    return 0;
     (void)argc;
     (void)argv;
     (void)flags;
