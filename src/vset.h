@@ -266,6 +266,8 @@
 #define VOLATILESET_BUCKET_INTERVAL_MIN (1LL << 4LL)  // 2^4 = 16 milliseconds
 
 #define VOLATILESET_VECTOR_BUCKET_MAX_SIZE 127
+
+typedef long long (*vsetGetExpiryFunc)(const void *entry);
 typedef struct {
     sds (*entryGetKey)(const void *entry);
 
@@ -279,7 +281,6 @@ typedef struct {
 typedef void vsetBucket;
 
 typedef struct {
-    volatileEntryType *etypr;
     vsetBucket *expiry_buckets;
 } vset;
 
@@ -304,17 +305,17 @@ typedef struct vsetIterator {
     int iteration_state; 
 } vsetIterator;
 
-int vsetRemoveEntry(vset *set, void *entry, long long expiry);
-int vsetAddEntry(vset *set, void *entry, long long expiry);
-void *vsetPopExpired(vset *set, mstime_t now);
-void *vsetFirstExpired(vset *set, mstime_t now);
-int vsetUpdateEntry(vset *set, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+int vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry, long long expiry);
+int vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry, long long expiry);
+void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+int vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
 void vsetStart(vset *set, vsetIterator *it);
 int vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void freeVolatileSet(vset *b);
-vset *createVolatileSet(volatileEntryType *type);
+vset *createVolatileSet(void);
 
 
 #endif

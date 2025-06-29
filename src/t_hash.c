@@ -42,12 +42,6 @@
 #include <string.h>
 #include "entry.h"
 
-
-volatileEntryType hashVolatileEntryType = {
-    .entryGetKey = (sds(*)(const void *entry))entryGetField,
-    .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
-};
-
 /*-----------------------------------------------------------------------------
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
@@ -83,7 +77,7 @@ static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     vset **vset_ref = hashtableMetadata(o->ptr);
     if (*vset_ref == NULL) {
-        *vset_ref = createVolatileSet(&hashVolatileEntryType);
+        *vset_ref = createVolatileSet();
         /* serves mainly for optimization. Use type which supports access function only when needed. */
         hashTypeIgnoreTTL(o, false);
     }
@@ -100,14 +94,14 @@ static void hashTypeDeleteVolatileSet(robj *o) {
 
 void hashTypeTrackEntry(robj *o, void *entry) {
     vset *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(vsetAddEntry(set, entry, entryGetExpiry(entry)));
+    serverAssert(vsetAddEntry(set, entryGetExpiry, entry, entryGetExpiry(entry)));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set, entry, entryGetExpiry(entry)));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry, entryGetExpiry(entry)));
     if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
@@ -124,13 +118,13 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     debugServerAssert(set);
 
     if (old_tracked && !new_tracked)
-        serverAssert(vsetRemoveEntry(set, old_entry, old_expiry));
+        serverAssert(vsetRemoveEntry(set, entryGetExpiry, old_entry, old_expiry));
     else if (new_tracked && !old_tracked)
-        serverAssert(vsetAddEntry(set, new_entry, new_expiry));
+        serverAssert(vsetAddEntry(set, entryGetExpiry, new_entry, new_expiry));
     else {
         vset *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
-        serverAssert(vsetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
+        serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }
     if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
