@@ -368,8 +368,7 @@ pVector *pvPop(pVector *pv, void **pelem) {
  * Notes:
  *   This is a simple in-place swap that uses direct pointer assignment. */
 void pvSwap(pVector *pv, uint32_t idx1, uint32_t idx2) {
-    assert(idx1 >= 0 && idx1 < PV_LEN(pv));
-    assert(idx2 >= 0 && idx2 < PV_LEN(pv));
+    assert(idx1 < PV_LEN(pv) && idx2 < PV_LEN(pv));
     void *temp = pvGet(pv, idx1);
     pv->data[idx1] = pv->data[idx2];
     pv->data[idx2] = temp;
