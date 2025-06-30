@@ -44,7 +44,7 @@ static inline uint32_t pvLen(pVector *vec) {
 
 /* Ensures that a pVector has enough capacity to hold additional elements.
  *
- * This function guarantees that the given pVector `sv` has at least enough
+ * This function guarantees that the given pVector `pv` has at least enough
  * allocated space to accommodate `additional` more elements, growing it if necessary.
  * If the vector is currently `NULL`, it will be newly allocated.
  *
@@ -53,7 +53,7 @@ static inline uint32_t pvLen(pVector *vec) {
  * reflect the actual allocated size.
  *
  * Arguments:
- *   sv       - Pointer to an existing pVector or NULL.
+ *   pv       - Pointer to an existing pVector or NULL.
  *   additional - The number of additional elements the vector should be able to accommodate.
  *
  * Return:
@@ -63,19 +63,19 @@ static inline uint32_t pvLen(pVector *vec) {
  * Note:
  *   The `additional` is the number of *additional* elements beyond the current length.
  *   This function does not modify the vector's logical length (`len`), only its allocation. */
-pVector *pvMakeRoomFor(pVector *sv, size_t additional) {
-    if (additional == 0) return sv;
-    size_t required = PV_HEADER_SIZE + (PV_LEN(sv) + additional) * PV_ELEM_SIZE;
-    if (PV_ALLOC(sv) >= required) return sv;
+pVector *pvMakeRoomFor(pVector *pv, size_t additional) {
+    if (additional == 0) return pv;
+    size_t required = PV_HEADER_SIZE + (PV_LEN(pv) + additional) * PV_ELEM_SIZE;
+    if (PV_ALLOC(pv) >= required) return pv;
 
-    if (!sv) {
-        sv = zmalloc(required);
-        sv->len = 0;
+    if (!pv) {
+        pv = zmalloc(required);
+        pv->len = 0;
     } else {
-        sv = zrealloc_usable(sv, required, &required);
+        pv = zrealloc_usable(pv, required, &required);
     }
-    sv->alloc = required;
-    return sv;
+    pv->alloc = required;
+    return pv;
 }
 
 /* Shrinks a pVector to release unused allocated memory.
@@ -90,7 +90,7 @@ pVector *pvMakeRoomFor(pVector *sv, size_t additional) {
  * size (`alloc`) to reflect the new length.
  *
  * Arguments:
- *  sv - A pointer to the `pVector` to shrink.
+ *  pv - A pointer to the `pVector` to shrink.
  *
  * Return:
  *  A potentially reallocated `pVector` with minimized memory usage,
@@ -104,28 +104,28 @@ pVector *pvMakeRoomFor(pVector *sv, size_t additional) {
  *     pVector *vec = pvNew();
  *     // After some insertions and deletions
  *     vec = pvShrinkToFit(vec); */
-pVector *pvShrinkToFit(pVector *sv) {
-    if (!sv) return NULL;
+pVector *pvShrinkToFit(pVector *pv) {
+    if (!pv) return NULL;
 
-    size_t used = PV_ALLOC(sv);
-    size_t required = pvLen(sv) == 0 ? 0 : PV_HEADER_SIZE + pvLen(sv) * PV_ELEM_SIZE;
+    size_t used = PV_ALLOC(pv);
+    size_t required = pvLen(pv) == 0 ? 0 : PV_HEADER_SIZE + pvLen(pv) * PV_ELEM_SIZE;
 
     if (used > required) {
         if (!required) {
-            zfree(sv);
+            zfree(pv);
             return NULL;
         }
-        sv = zrealloc_usable(sv, used, &required);
-        sv->alloc = required;
+        pv = zrealloc_usable(pv, used, &required);
+        pv->alloc = required;
     }
-    return sv;
+    return pv;
 }
 
 /**
  * pvSplit - Splits a pVector into two parts at a given index.
  *
  * Arguments:
- * sv_ptr:       A pointer to the pVector* to split. This pointer is
+ * pv_ptr:       A pointer to the pVector* to split. This pointer is
  *                updated in-place to point to the left portion (elements [0..split_index-1]).
  * split_index:  The index at which to split the vector. The resulting right
  *                vector will contain elements [split_index..len-1].
@@ -151,34 +151,34 @@ pVector *pvShrinkToFit(pVector *sv) {
  *       • The `split_index` is such that the right part would have 0 elements.
  *
  * Side effects:
- *   - The original vector pointer (`*sv_ptr`) is modified to point to the
+ *   - The original vector pointer (`*pv_ptr`) is modified to point to the
  *     resized left portion.
  *
  * Example:
  * --------
- * Suppose `sv_ptr` points to a vector of 5 elements:
+ * Suppose `pv_ptr` points to a vector of 5 elements:
  *     [A, B, C, D, E]
  *
  * Calling:
- *     pVector *right = pvSplit(&sv_ptr, 3);
+ *     pVector *right = pvSplit(&pv_ptr, 3);
  *
  * Results in:
- *     sv_ptr -> [A, B, C]
+ *     pv_ptr -> [A, B, C]
  *     right   -> [D, E]
  *
  * If the split_index is 5 (i.e. the end), the function returns NULL and the
  * original vector is unchanged. */
-pVector *pvSplit(pVector **sv_ptr, uint32_t split_index) {
-    pVector *sv = *sv_ptr;
+pVector *pvSplit(pVector **pv_ptr, uint32_t split_index) {
+    pVector *pv = *pv_ptr;
 
     // Handle edge cases: null or empty
-    if (!sv || sv->len <= 1) return NULL;
+    if (!pv || pv->len <= 1) return NULL;
 
     // If no valid split found, return NULL (entire vector is one block)
-    if (split_index == sv->len) return NULL;
+    if (split_index == pv->len) return NULL;
 
     // Number of elements for the right half
-    uint64_t right_len = sv->len - split_index;
+    uint64_t right_len = pv->len - split_index;
     if (right_len == 0) return NULL;
 
     // Allocate new vector for right part
@@ -190,11 +190,11 @@ pVector *pvSplit(pVector **sv_ptr, uint32_t split_index) {
     right->len = right_len;
 
     // Copy the right part
-    memcpy(&right->data[0], &sv->data[split_index], right_len * item_bytes);
+    memcpy(&right->data[0], &pv->data[split_index], right_len * item_bytes);
 
     // Shrink original vector
-    sv->len = split_index;
-    *sv_ptr = pvShrinkToFit(sv); // Optional: shrink in-place to reduce memory
+    pv->len = split_index;
+    *pv_ptr = pvShrinkToFit(pv); // Optional: shrink in-place to reduce memory
 
     return right;
 }
@@ -226,22 +226,22 @@ pVector *pvNew(uint32_t capacity) {
  * and inserts the given element at the desired position.
  *
  * Arguments:
- *   sv   - The pVector to insert into (can be NULL).
+ *   pv   - The pVector to insert into (can be NULL).
  *   elem - The pointer to be inserted.
- *   pos  - The index at which to insert the element (must be ≤ sv->len).
+ *   pos  - The index at which to insert the element (must be ≤ pv->len).
  *
  * Return:
  *   The updated pVector with the element inserted. */
-pVector *pvInsert(pVector *sv, void *elem, uint32_t pos) {
-    sv = pvMakeRoomFor(sv, 1);
+pVector *pvInsert(pVector *pv, void *elem, uint32_t pos) {
+    pv = pvMakeRoomFor(pv, 1);
 
-    if (pos < sv->len) {
-        memmove(&sv->data[pos + 1], &sv->data[pos], (sv->len - pos) * sizeof(void *));
+    if (pos < pv->len) {
+        memmove(&pv->data[pos + 1], &pv->data[pos], (pv->len - pos) * sizeof(void *));
     }
 
-    sv->data[pos] = elem;
-    sv->len++;
-    return sv;
+    pv->data[pos] = elem;
+    pv->len++;
+    return pv;
 }
 
 /* Removes the element at the specified index from the pVector.
@@ -250,23 +250,23 @@ pVector *pvInsert(pVector *sv, void *elem, uint32_t pos) {
  * If this is the last element in the vector, the vector is freed and NULL is returned.
  *
  * Arguments:
- *   sv  - The pVector to remove from.
- *   idx - The index of the element to remove (must be < sv->len).
+ *   pv  - The pVector to remove from.
+ *   idx - The index of the element to remove (must be < pv->len).
  *
  * Return:
  *   The updated pVector after removal.
  *   Returns NULL if the last element was removed and the vector was freed. */
-pVector *pvRemoveAt(pVector *sv, uint32_t idx) {
-    if (!sv || sv->len == 0) return sv;
-    assert(idx < sv->len);
-    if (sv->len == 1) {
+pVector *pvRemoveAt(pVector *pv, uint32_t idx) {
+    if (!pv || pv->len == 0) return pv;
+    assert(idx < pv->len);
+    if (pv->len == 1) {
         /* Last element being removed; delete vector */
-        zfree(sv);
+        zfree(pv);
         return NULL;
-    } else if (idx < sv->len - 1UL)
-        memmove(&sv->data[idx], &sv->data[idx + 1], (sv->len - idx - 1) * PV_ELEM_SIZE);
-    sv->len--;
-    return pvShrinkToFit(sv);
+    } else if (idx < pv->len - 1UL)
+        memmove(&pv->data[idx], &pv->data[idx + 1], (pv->len - idx - 1) * PV_ELEM_SIZE);
+    pv->len--;
+    return pvShrinkToFit(pv);
 }
 
 /* Removes the first matching element from the pVector.
@@ -275,18 +275,18 @@ pVector *pvRemoveAt(pVector *sv, uint32_t idx) {
  * Updates the vector pointer in case a removal was done.
  *
  * Arguments:
- *   sv   - A pointer to the location of the pVector to remove from.
+ *   pv   - A pointer to the location of the pVector to remove from.
  *   elem - The element pointer to match and remove.
  *
  * Return:
  *   true in case a removal was made, false otherwise */
-bool pvRemove(pVector **psv, void *elem) {
-    pVector *sv = *psv;
-    if (!sv || sv->len == 0) return false;
+bool pvRemove(pVector **ppv, void *elem) {
+    pVector *pv = *ppv;
+    if (!pv || pv->len == 0) return false;
 
-    for (uint32_t i = 0; i < sv->len; i++) {
-        if (sv->data[i] == elem) {
-            *psv = pvRemoveAt(sv, i);
+    for (uint32_t i = 0; i < pv->len; i++) {
+        if (pv->data[i] == elem) {
+            *ppv = pvRemoveAt(pv, i);
             return true;
         }
     }
@@ -310,23 +310,23 @@ void *pvGet(pVector *vec, uint32_t idx) {
 /* Frees the memory used by the pVector.
  *
  * Arguments:
- *   sv - The pVector to free.
+ *   pv - The pVector to free.
  *
  * Return:
  *   None. */
-void pvFree(pVector *sv) {
-    if (sv) zfree(sv);
+void pvFree(pVector *pv) {
+    if (pv) zfree(pv);
 }
 
-uint32_t pvFind(pVector *sv, void *elem) {
-    if (!sv || sv->len == 0) return 0;
+uint32_t pvFind(pVector *pv, void *elem) {
+    if (!pv || pv->len == 0) return 0;
 
-    for (uint32_t i = 0; i < sv->len; i++) {
-        if (sv->data[i] == elem) {
+    for (uint32_t i = 0; i < pv->len; i++) {
+        if (pv->data[i] == elem) {
             return i;
         }
     }
-    return sv->len;
+    return pv->len;
 }
 /*************************************************************************************************************
  *                                pVector End
@@ -441,10 +441,10 @@ static inline size_t encodeNewExpiryBucketKey(unsigned char *key, long long expi
  * Performs binary search to find the index where the element should be inserted.
  * Returns the index where the element should be placed to keep the array sorted.
  *
- * sv Pointer to the sorted vector
+ * pv Pointer to the sorted vector
  * elem Pointer to the element to insert
  * cmp Comparison function (like strcmp-style: <0, ==0, >0)
- * returns the insertion index (between 0 and sv->len) */
+ * returns the insertion index (between 0 and pv->len) */
 static inline uint32_t findInsertPosition(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, long long expiry) {
     pVector *pv = vsetBucketVector(bucket);
     uint32_t left = 0;
@@ -485,11 +485,11 @@ static inline uint32_t findInsertPosition(vsetGetExpiryFunc getExpiry, vsetBucke
  *     bucket_ts[element[i-1]] < bucket_ts[element[i]]
  *
  * If no valid split is found (i.e. all elements map to the same bucket timestamp),
- * the function returns `sv->len` to indicate that splitting is not possible.
+ * the function returns `pv->len` to indicate that splitting is not possible.
  *
  * Return:
- *   - A valid split index in the range [1, sv->len], where the split occurs.
- *   - May return `sv->len` if no valid position is found.
+ *   - A valid split index in the range [1, pv->len], where the split occurs.
+ *   - May return `pv->len` if no valid position is found.
  *
  * Example:
  * --------
@@ -662,10 +662,10 @@ static bool splitBucketIfPossible(vsetBucket *parent, vsetGetExpiryFunc getExpir
     long long target_bucket_ts = bucket_ts;
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     vsetBucket *new_bucket = NULL;
-    pVector *sv = vsetBucketVector(bucket);
+    pVector *pv = vsetBucketVector(bucket);
     rax *expiry_buckets = vsetBucketRax(parent);
-    long long max_bucket_ts = get_bucket_ts(getExpiry(sv->data[pvLen(sv) - 1]));
-    long long min_bucket_ts = get_bucket_ts(getExpiry(sv->data[0]));
+    long long max_bucket_ts = get_bucket_ts(getExpiry(pv->data[pvLen(pv) - 1]));
+    long long min_bucket_ts = get_bucket_ts(getExpiry(pv->data[0]));
 
     if (max_bucket_ts < bucket_ts) {
         /* In case the bucket is already spanning over a larger window than needed, just place the bucket in a new place */
@@ -678,7 +678,7 @@ static bool splitBucketIfPossible(vsetBucket *parent, vsetGetExpiryFunc getExpir
         /* lets split the bucket. we know we can do it. */
         uint32_t split_index = findSplitPosition(getExpiry, bucket, &target_bucket_ts);
         assert(target_bucket_ts < bucket_ts);
-        assert(split_index != pvLen(sv)); /* no way to split it ???  */
+        assert(split_index != pvLen(pv)); /* no way to split it ???  */
         pVector *new_bucket_vector = vsetBucketVector(bucket);
         bucket = vsetBucketFromVector(pvSplit(&new_bucket_vector, split_index));
         new_bucket = vsetBucketFromVector(new_bucket_vector);
@@ -709,17 +709,17 @@ static inline vsetBucket *insertToBucket_NONE(vsetGetExpiryFunc getExpiry, vsetB
 
 static inline vsetBucket *insertToBucket_SINGLE(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, void *entry, long long expiry) {
     /* Upgrade to vector */
-    pVector *sv = pvNew(2);
+    pVector *pv = pvNew(2);
     void *curr_entry = vsetBucketSingle(bucket);
     long long curr_expiry = getExpiry(curr_entry);
     if (curr_expiry < expiry) {
-        sv = pvInsert(sv, curr_entry, 0);
-        sv = pvInsert(sv, entry, 1);
+        pv = pvInsert(pv, curr_entry, 0);
+        pv = pvInsert(pv, entry, 1);
     } else {
-        sv = pvInsert(sv, entry, 0);
-        sv = pvInsert(sv, curr_entry, 1);
+        pv = pvInsert(pv, entry, 0);
+        pv = pvInsert(pv, curr_entry, 1);
     }
-    bucket = vsetBucketFromVector(sv);
+    bucket = vsetBucketFromVector(pv);
     return bucket;
 }
 
@@ -776,8 +776,8 @@ static inline vsetBucket *insertToBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBu
         // alternative: raxInsert(expiry_buckets, key, key_len, bucket, NULL);
         raxSetData(node, bucket);
     } else if (type == VSET_BUCKET_VECTOR) {
-        pVector *sv = vsetBucketVector(bucket);
-        if (pvLen(sv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
+        pVector *pv = vsetBucketVector(bucket);
+        if (pvLen(pv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(target, getExpiry, bucket, bucket_ts, node)) {
                 /* Can't split? insrt to the vector anyway, it will just expand to hashtable */
@@ -824,26 +824,26 @@ static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, v
 
     vsetBucket *new_bucket = bucket;
     bool success = false;
-    pVector *sv = vsetBucketVector(bucket);
+    pVector *pv = vsetBucketVector(bucket);
     /* In case we we removed the entry */
-    uint32_t vlen = pvLen(sv);
+    uint32_t vlen = pvLen(pv);
     if (vlen <= 2) {
         /* convert to single if needed */
-        uint32_t idx = pvFind(sv, entry);
+        uint32_t idx = pvFind(pv, entry);
         if (idx == vlen) {
             success = false;
         } else {
             if (vlen == 1)
                 new_bucket = vsetBucketFromNone();
             else
-                new_bucket = vsetBucketFromSingle(pvGet(sv, idx == 0 ? 1 : 0));
+                new_bucket = vsetBucketFromSingle(pvGet(pv, idx == 0 ? 1 : 0));
             success = true;
-            pvFree(sv);
+            pvFree(pv);
         }
     } else {
-        if (pvRemove(&sv, entry)) {
+        if (pvRemove(&pv, entry)) {
             success = true;
-            new_bucket = vsetBucketFromVector(sv);
+            new_bucket = vsetBucketFromVector(pv);
         }
     }
     if (removed) *removed = success;

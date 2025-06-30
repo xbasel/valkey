@@ -279,12 +279,14 @@ typedef vsetBucket *vset;
 typedef struct vsetIterator {
     /* for rax bucket */
     raxIterator riter;
-    /* for hashtable bucket */
-    hashtableIterator hiter;
-    /* for vector bucket */
-    uint32_t viter;
-    /* for single bucket */
-    void *vsingle;
+    union {
+        /* for hashtable bucket */
+        hashtableIterator hiter;
+        /* for vector bucket */
+        uint32_t viter;
+        /* for single bucket */
+        void *vsingle;
+    };
     /* the parent of the bucket we are currently iterating on */
     vsetBucket *parent_bucket;
     /* the bucket we are currently iterating on */
