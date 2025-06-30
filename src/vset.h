@@ -295,14 +295,14 @@ typedef struct vsetIterator {
     int iteration_state;
 } vsetIterator;
 
-int vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry, long long expiry);
-int vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry, long long expiry);
+bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
+bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
-int vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
 void vsetStart(vset *set, vsetIterator *it);
-int vsetNext(vsetIterator *it, void **entryptr);
+bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void freeVolatileSet(vset *b);
 vset *createVolatileSet(vset *set);

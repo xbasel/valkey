@@ -93,14 +93,14 @@ static void hashTypeDeleteVolatileSet(robj *o) {
 
 void hashTypeTrackEntry(robj *o, void *entry) {
     vset *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(vsetAddEntry(set, entryGetExpiry, entry, entryGetExpiry(entry)));
+    serverAssert(vsetAddEntry(set, entryGetExpiry, entry));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry, entryGetExpiry(entry)));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
     if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
@@ -116,13 +116,8 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     vset *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
-    if (old_tracked && !new_tracked)
-        serverAssert(vsetRemoveEntry(set, entryGetExpiry, old_entry, old_expiry));
-    else if (new_tracked && !old_tracked)
-        serverAssert(vsetAddEntry(set, entryGetExpiry, new_entry, new_expiry));
-    else {
-        serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
-    }
+    serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
+
     if (vsetIsEmpty(set)) {
         hashTypeDeleteVolatileSet(o);
     }
