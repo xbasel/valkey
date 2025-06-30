@@ -60,9 +60,9 @@
  *
  * 1. If the current set is `NONE`, it becomes a `SINGLE` bucket.
  * 2. If the set is a `SINGLE` bucket and another entry arrives:
- *      → it is promoted to a `VECTOR` bucket (sorted by expiry).
+ *      -> it is promoted to a `VECTOR` bucket (sorted by expiry).
  * 3. If the `VECTOR` exceeds `VOLATILESET_VECTOR_BUCKET_MAX_SIZE` (127):
- *      → the set becomes a `RAX`, and existing entries are migrated.
+ *      -> the set becomes a `RAX`, and existing entries are migrated.
  * 4. IF the set is using RAX encoding it will locate a bucket to add the entry
  *    following the strategy explained below.
  *
@@ -114,7 +114,7 @@
  *      - Only done if ALL entries still fit in the tighter window.
  *      - Effectively “moves” the bucket to an earlier timestamp.
  *
- *        Example: B(ts=128, span=128ms) → B(ts=64, span=16ms)
+ *        Example: B(ts=128, span=128ms) -> B(ts=64, span=16ms)
  *
  * 2. **Split into two buckets:**
  *      - Use binary search to find a “natural” boundary based on entry expiry.
@@ -124,18 +124,18 @@
  *        Example:
  *
  *        Before:
- *             [ Entry0 ... Entry126 ]  → B(ts=128)
+ *             [ Entry0 ... Entry126 ]  -> B(ts=128)
  *
  *        After Split:
- *             [ Entry0...Entry62 ]     → New B(ts=64)
- *             [ Entry63...Entry126 ]   → Original B(ts=128)
+ *             [ Entry0...Entry62 ]     -> New B(ts=64)
+ *             [ Entry63...Entry126 ]   -> Original B(ts=128)
  *
  * 3. **Convert to hashtable:**
  *      - When no clean split is found (e.g. all entries share similar expiry),
  *        and realignment is not possible.
  *      - This allows efficient O(1) lookups even with clustered expiry values.
  *
- *        Vector B(ts=128) → Hashtable B(ts=128)
+ *        Vector B(ts=128) -> Hashtable B(ts=128)
  *
  * This hierarchical design ensures:
  *   - Efficient memory usage (tight buckets)
@@ -157,9 +157,9 @@
  *     +--------------------------+
  *     | RAX (key = bucket_ts)   |
  *     |--------------------------|
- *     | "000016" → [entry1]     |  ← Vector (SINGLE→VECTOR→HT)
- *     | "000032" → [entry2...]  |  ← Full vector, might split
- *     | "000048" → [entry...]   |
+ *     | "000016" -> [entry1]     |  <- Vector (SINGLE->VECTOR->HT)
+ *     | "000032" -> [entry2...]  |  <- Full vector, might split
+ *     | "000048" -> [entry...]   |
  *     +--------------------------+
  *
  * * Splitting a Full Vector in RAX:
@@ -174,8 +174,8 @@
  *                         split (first where get_bucket_ts(entry) > min_ts)
  *
  *     2. Create two vectors:
- *            bucket A → [entry1..entry6]  with key = "000032"
- *            bucket B → [entry7..entry13] with key = "000048"
+ *            bucket A -> [entry1..entry6]  with key = "000032"
+ *            bucket B -> [entry7..entry13] with key = "000048"
  *
  *     3. Insert both back to the RAX.
  *
@@ -196,11 +196,11 @@
  *       |
  *       v
  *     +-------------+
- *     | key → bucket|
+ *     | key -> bucket|
  *     +-------------+
- *     | "000016" → VECTOR
- *     | "000032" → HT
- *     | "000048" → SINGLE
+ *     | "000016" -> VECTOR
+ *     | "000032" -> HT
+ *     | "000048" -> SINGLE
  *     +-------------+
  *
  *-----------------------------------------------------------------------------
