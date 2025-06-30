@@ -305,7 +305,8 @@ void vsetStart(vset *set, vsetIterator *it);
 bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void freeVolatileSet(vset *b);
-vset *createVolatileSet(vset *set);
+void vsetInit(vset *set);
+void vsetClear(vset *set);
 
 
 #endif

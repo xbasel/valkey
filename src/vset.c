@@ -1226,16 +1226,16 @@ void vsetStop(vsetIterator *it) {
         hashtableResetIterator(&it->hiter);
 }
 
-vset *createVolatileSet(vset *set) {
+void vsetInit(vset *set) {
     *set = vsetBucketFromNone();
-    return set;
 }
 
 /* Free all the vset memory used in order to reference the entries.
  * Since the set only holds references to entries the entries themselves are NOT freed */
-void freeVolatileSet(vset *set) {
+void vsetClear(vset *set) {
     if (!(*set)) return;
     freeVsetBucket(*set);
+    *set = vsetBucketFromNone();
 }
 
 bool vsetIsEmpty(vset *set) {

@@ -54,7 +54,7 @@ static vset *hashTypeGetVolatileSet(robj *o) {
 void hashTypeFreeVolatileSet(robj *o) {
     vset *set = hashTypeGetVolatileSet(o);
     if (set)
-        freeVolatileSet(set);
+        vsetClear(set);
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
@@ -77,7 +77,7 @@ static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     vset *vset = hashtableMetadata(o->ptr);
     if (*vset == NULL) {
-        createVolatileSet(vset);
+        vsetInit(vset);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
         hashTypeIgnoreTTL(o, false);
     }
@@ -86,7 +86,7 @@ static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
 
 static void hashTypeDeleteVolatileSet(robj *o) {
     vset *vset = hashtableMetadata(o->ptr);
-    freeVolatileSet(vset);
+    vsetClear(vset);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
     hashTypeIgnoreTTL(o, true);
 }
