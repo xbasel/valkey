@@ -92,31 +92,32 @@
  *        |------------------ Bucket Span ------------------|
  *        [window_start .................................. bucket_ts)
  *
- * ASCII Layout Example:
+ * Layout Example:
  *
- *   Timeline:             ---> increasing time --->
- *                         +------+---------+--------+
- *                         | B0   |   B1    |   B2   |
- *                         | ts=32| ts=128  | ts=2048|
- *                         +------+---------+--------+
- *                         ^      ^         ^
- *                         |      |         |
- *               [E1,E2] ∈ B0   [E3...E7] ∈ B1    [E8...] ∈ B2
- *               All entries expire BEFORE their bucket_ts
+ *   Timeline:         ----------> increasing time ----------->
+ *                     +--------------+-------------+---------+
+ *                     | B0           | B1          |   B2    |
+ *                     | ts=32        | ts=128      | ts=2048 |
+ *                     +--------------+-------------+---------+
+ *                     ^              ^             ^
+ *                     |              |             |
+ *           [E1,E2] ∈ B0      [E3...E7] ∈ B1     [E8...E15] ∈ B2
+ *
+ *           All entries expire BEFORE their bucket_ts
  *
  * Bucket Splitting Strategy:
  * ----------------------------------
  *
  * When a bucket (e.g. VECTOR) becomes too dense or needs realignment:
  *
- * 1. **Re-align to lower granularity:**
+ * 1. Re-align to lower granularity:
  *      - Adjust the bucket timestamp down to a finer granularity (e.g. 16ms).
  *      - Only done if ALL entries still fit in the tighter window.
  *      - Effectively “moves” the bucket to an earlier timestamp.
  *
  *        Example: B(ts=128, span=128ms) -> B(ts=64, span=16ms)
  *
- * 2. **Split into two buckets:**
+ * 2. Split into two buckets:
  *      - Use binary search to find a “natural” boundary based on entry expiry.
  *      - Original bucket retains its timestamp (but holds fewer entries).
  *      - New bucket is inserted before the current one with its own tighter timestamp.
@@ -130,7 +131,7 @@
  *             [ Entry0...Entry62 ]     -> New B(ts=64)
  *             [ Entry63...Entry126 ]   -> Original B(ts=128)
  *
- * 3. **Convert to hashtable:**
+ * 3. Convert to hashtable:
  *      - When no clean split is found (e.g. all entries share similar expiry),
  *        and realignment is not possible.
  *      - This allows efficient O(1) lookups even with clustered expiry values.
@@ -155,7 +156,7 @@
  *     expiry_buckets = rax * | 0x6
  *
  *     +--------------------------+
- *     | RAX (key = bucket_ts)   |
+ *     | RAX (key = bucket_ts)    |
  *     |--------------------------|
  *     | "000016" -> [entry1]     |  <- Vector (SINGLE->VECTOR->HT)
  *     | "000032" -> [entry2...]  |  <- Full vector, might split
@@ -192,17 +193,18 @@
  *     VECTOR (sorted, up to 127)
  *       |
  *       v
- *     RAX
- *       |
- *       v
- *     +-------------+
- *     | key -> bucket|
- *     +-------------+
- *     | "000016" -> VECTOR
- *     | "000032" -> HT
- *     | "000048" -> SINGLE
- *     +-------------+
+ *     RAX (holds multiple buckets, keyed by each bucket's end timestamp)
+ *     Bucket types within a RAX:
  *
+ *                    SINGLE
+ *                      |
+ *                      v  
+ *                    VECTOR (sorted, up to 127, can split
+ *                      |     into multiple vectors)
+ *                      |
+ *                      v
+ *                   HASHTABLE (only when a vector can't split)
+ *    
  *-----------------------------------------------------------------------------
  * Entry Type Contract
  *-----------------------------------------------------------------------------
@@ -220,26 +222,26 @@
  *-----------------------------------------------------------------------------
  *
  * Create/Free:
- *     vset *createVolatileSet(volatileEntryType *type);
- *     void freeVolatileSet(vset *set);
+ *     void vsetInit(vset *set);
+ *     void vsetClear(vset *set);
  *
  * Mutation:
- *     int vsetAddEntry(vset *set, void *entry, long long expiry);
- *     int vsetRemoveEntry(vset *set, void *entry, long long expiry);
- *     int vsetUpdateEntry(vset *set, void *old_entry,
+ *     bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
+ *     bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
+ *     bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry,
  *                                void *new_entry, long long old_expiry,
  *                                long long new_expiry);
  *
  * Expiry Retrieval:
- *     void *vsetFirstExpired(vset *set, mstime_t now);
- *     void *vsetPopExpired(vset *set, mstime_t now);
+ *     void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+ *     void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
  *
  * Utilities:
  *     bool vsetIsEmpty(vset *set);
  *
  * Iteration:
  *     void vsetStart(vset *set, vsetIterator *it);
- *     int vsetNext(vsetIterator *it, void **entryptr);
+ *     bool vsetNext(vsetIterator *it, void **entryptr);
  *     void vsetStop(vsetIterator *it);
  *
  *-----------------------------------------------------------------------------
@@ -304,7 +306,6 @@ bool vsetIsEmpty(vset *set);
 void vsetStart(vset *set, vsetIterator *it);
 bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
-void freeVolatileSet(vset *b);
 void vsetInit(vset *set);
 void vsetClear(vset *set);
 
