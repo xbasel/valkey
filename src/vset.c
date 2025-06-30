@@ -318,6 +318,76 @@ void pvFree(pVector *pv) {
     if (pv) zfree(pv);
 }
 
+/* Appends an element to the end of the given pVector.
+ *
+ * Parameters:
+ *   pv   - The vector to append to.
+ *   elem - The element to append.
+ *
+ * Returns:
+ *   A (possibly reallocated) pVector with the new element inserted at the end.
+ *
+ * Notes:
+ *   Internally this uses pvInsert() with the current length of the vector,
+ *   effectively appending the element. */
+pVector *pvPush(pVector *pv, void *elem) {
+    return pvInsert(pv, elem, PV_LEN(pv));
+}
+
+/* Removes and optionally returns the last element from the given pVector.
+ *
+ * Parameters:
+ *   pv    - The vector to remove the element from.
+ *   pelem - Optional pointer to store the popped element. Can be NULL.
+ *
+ * Returns:
+ *   A (possibly reallocated) pVector with the last element removed.
+ *
+ * Notes:
+ *   If the vector is empty, the behavior is to remove from index 0 (safe fallback).
+ *   You can pass NULL for `pelem` if you don't need the removed value. */
+pVector *pvPop(pVector *pv, void **pelem) {
+    uint32_t last_idx = PV_LEN(pv) > 0 ? PV_LEN(pv) - 1 : 0;
+    if (pelem) *pelem = pvGet(pv, last_idx);
+    return pvRemoveAt(pv, last_idx);
+}
+
+/* Swaps two elements at given indices inside the pVector.
+ *
+ * Parameters:
+ *   pv    - The vector containing the elements to swap.
+ *   idx1  - Index of the first element.
+ *   idx2  - Index of the second element.
+ *
+ * Returns:
+ *   None.
+ *
+ * Preconditions:
+ *   - idx1 and idx2 must both be valid indices within the vector.
+ *
+ * Notes:
+ *   This is a simple in-place swap that uses direct pointer assignment. */
+void pvSwap(pVector *pv, uint32_t idx1, uint32_t idx2) {
+    assert(idx1 >= 0 && idx1 < PV_LEN(pv));
+    assert(idx2 >= 0 && idx2 < PV_LEN(pv));
+    void *temp = pvGet(pv, idx1);
+    pv->data[idx1] = pv->data[idx2];
+    pv->data[idx2] = temp;
+}
+
+/* Finds the index of the given element in the pVector.
+ *
+ * Parameters:
+ *   pv   - The vector to search.
+ *   elem - The element to look for (pointer equality).
+ *
+ * Returns:
+ *   The index of the element if found; otherwise, returns pv->len (i.e., not found).
+ *
+ * Notes:
+ *   - This compares elements using raw pointer equality (`==`).
+ *   - If pv is NULL or empty, returns 0 as a safe fallback.
+ *   - Return value being equal to pv->len can be used to check for absence. */
 uint32_t pvFind(pVector *pv, void *elem) {
     if (!pv || pv->len == 0) return 0;
 
@@ -328,6 +398,36 @@ uint32_t pvFind(pVector *pv, void *elem) {
     }
     return pv->len;
 }
+
+/* Sort the elements of a pVector using a user-provided comparison function.
+ *
+ * This function performs an in-place sort of the elements in the given pVector.
+ * It uses the standard C library `qsort()` function under the hood and assumes
+ * the elements are pointers. The caller must supply a comparison function
+ * compatible with `qsort()`, which determines the ordering of the elements.
+ *
+ * Parameters:
+ *   pv      - A pointer to the pVector to sort.
+ *   compare - A function pointer used to compare two elements. This function must
+ *             match the signature: int compare(const void *a, const void *b)
+ *             and return:
+ *                < 0 if *a < *b
+ *                > 0 if *a > *b
+ *                0   if *a == *b
+ *
+ * Returns:
+ *   None. The pVector is sorted in place.
+ *
+ * Example:
+ *   int cmp(const void *a, const void *b) {
+ *       return strcmp(*(const char **)a, *(const char **)b);
+ *   }
+ *
+ *   pvSort(my_vector, cmp); */
+void pvSort(pVector *pv, int (*compare)(const void *a, const void *b)) {
+    qsort(pv->data, pv->len, sizeof(void *), compare);
+}
+
 /*************************************************************************************************************
  *                                pVector End
  *************************************************************************************************************/
@@ -406,6 +506,31 @@ static inline vsetBucket *vsetBucketFromRax(rax *r) {
 /* compare 2 expiration times */
 #define EXPIRE_COMPARE(exp1, exp2) (exp1 < exp2 ? -1 : exp1 == exp2 ? 0 \
                                                                     : 1)
+
+/* Since we do not have native posix support for qsort_r, we use this variable to help the vset
+ * compare function operate entry comparison given a dynamic getExpiry function is passed to
+ * different vset functions. */
+static __thread vsetGetExpiryFunc current_getter_func;
+
+static inline void vsetSetExpiryGetter(vsetGetExpiryFunc f) {
+    assert(current_getter_func == NULL);
+    current_getter_func = f;
+}
+
+static inline void vsetUnsetExpiryGetter(void) {
+    current_getter_func = NULL;
+}
+
+static inline vsetGetExpiryFunc vsetGetExpiryGetter(void) {
+    return current_getter_func;
+}
+
+static int vsetCompareEntries(const void *a, const void *b) {
+    vsetGetExpiryFunc getExpiry = vsetGetExpiryGetter();
+    long long ea = getExpiry(*(void **)a);
+    long long eb = getExpiry(*(void **)b);
+    return (ea > eb) - (ea < eb);
+}
 
 static inline long long get_bucket_ts(long long expiry) {
     return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MIN;
@@ -664,6 +789,12 @@ static bool splitBucketIfPossible(vsetBucket *parent, vsetGetExpiryFunc getExpir
     vsetBucket *new_bucket = NULL;
     pVector *pv = vsetBucketVector(bucket);
     rax *expiry_buckets = vsetBucketRax(parent);
+    /* first lets sort the vector. we cannot take a decision without it.
+     * We set the global expiry getter so we can sort according to the provided getExpiry function. */
+    vsetSetExpiryGetter(getExpiry);
+    pvSort(pv, vsetCompareEntries);
+    vsetUnsetExpiryGetter();
+
     long long max_bucket_ts = get_bucket_ts(getExpiry(pv->data[pvLen(pv) - 1]));
     long long min_bucket_ts = get_bucket_ts(getExpiry(pv->data[0]));
 
@@ -713,17 +844,19 @@ static inline vsetBucket *insertToBucket_SINGLE(vsetGetExpiryFunc getExpiry, vse
     void *curr_entry = vsetBucketSingle(bucket);
     long long curr_expiry = getExpiry(curr_entry);
     if (curr_expiry < expiry) {
-        pv = pvInsert(pv, curr_entry, 0);
-        pv = pvInsert(pv, entry, 1);
+        pv = pvPush(pv, curr_entry);
+        pv = pvPush(pv, entry);
     } else {
-        pv = pvInsert(pv, entry, 0);
-        pv = pvInsert(pv, curr_entry, 1);
+        pv = pvPush(pv, entry);
+        pv = pvPush(pv, curr_entry);
     }
     bucket = vsetBucketFromVector(pv);
     return bucket;
 }
 
-static inline vsetBucket *insertToBucket_VECTOR(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, void *entry, long long expiry) {
+static inline vsetBucket *insertToBucket_VECTOR(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, void *entry, long long expiry, int pos) {
+    UNUSED(getExpiry);
+    UNUSED(expiry);
     pVector *pv = vsetBucketVector(bucket);
     /* limit of the number of elements in a vector. */
     if (pvLen(pv) >= VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
@@ -738,8 +871,12 @@ static inline vsetBucket *insertToBucket_VECTOR(vsetGetExpiryFunc getExpiry, vse
 
         return vsetBucketFromHashtable(ht);
     } else {
-        uint32_t pos = findInsertPosition(getExpiry, bucket, expiry);
-        return vsetBucketFromVector(pvInsert(pv, entry, pos));
+        if (pos >= 0)
+            /* In case we are explicitly provided a position to insert place the entry there */
+            return vsetBucketFromVector(pvInsert(pv, entry, pos));
+        else
+            /* Otherwise it is better to just push the entry to the vector with less change of memmove and reallocation. */
+            return vsetBucketFromVector(pvPush(pv, entry));
     }
     return NULL;
 }
@@ -781,7 +918,7 @@ static inline vsetBucket *insertToBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBu
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(target, getExpiry, bucket, bucket_ts, node)) {
                 /* Can't split? insrt to the vector anyway, it will just expand to hashtable */
-                bucket = insertToBucket_VECTOR(getExpiry, bucket, entry, expiry);
+                bucket = insertToBucket_VECTOR(getExpiry, bucket, entry, expiry, -1);
                 assert(vsetBucketType(bucket) == VSET_BUCKET_HT);
                 /* In order to avoid rax override, we directly change the node data */
                 // alternative raxInsert(expiry_buckets, key, key_len, bucket, NULL);
@@ -791,7 +928,7 @@ static inline vsetBucket *insertToBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBu
                 return insertToBucket_RAX(getExpiry, target, entry, expiry);
             }
         } else {
-            vsetBucket *new_bucket = insertToBucket_VECTOR(getExpiry, bucket, entry, expiry);
+            vsetBucket *new_bucket = insertToBucket_VECTOR(getExpiry, bucket, entry, expiry, -1);
             if (new_bucket != bucket)
                 /* In order to avoid rax override, we directly change the node data */
                 // alternative: raxInsert(expiry_buckets, key, key_len, new_bucket, NULL);
@@ -1104,7 +1241,8 @@ bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry) {
                 expiry_buckets = insertToBucket_RAX(getExpiry, expiry_buckets, entry, expiry);
             }
         } else {
-            expiry_buckets = insertToBucket_VECTOR(getExpiry, expiry_buckets, entry, expiry);
+            uint32_t pos = findInsertPosition(getExpiry, expiry_buckets, expiry);
+            expiry_buckets = insertToBucket_VECTOR(getExpiry, expiry_buckets, entry, expiry, pos);
         }
         break;
     }
