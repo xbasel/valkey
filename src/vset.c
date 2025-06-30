@@ -1017,6 +1017,54 @@ static inline int vsetBucketNext_RAX(vsetIterator *it, void **entryptr) {
     return 1;
 }
 
+/* Adds an entry to a volatile set (vset) based on its expiration time.
+ *
+ * The volatile set maintains buckets of entries grouped by time windows. Each
+ * entry is inserted into an appropriate bucket based on its expiry timestamp.
+ * Buckets are memory-efficient and use dynamic representations that evolve as
+ * the number of entries grows:
+ *
+ *  - VSET_BUCKET_NONE:
+ *      Indicates the set is empty. A new SINGLE bucket is created to hold the entry.
+ *
+ *  - VSET_BUCKET_SINGLE:
+ *      Holds a single entry directly. Upon inserting a second entry, the bucket
+ *      is promoted to a VECTOR, preserving the sorted order.
+ *
+ *  - VSET_BUCKET_VECTOR:
+ *      Stores entries in a compact, sorted vector. The maximum size is 127 entries.
+ *      If inserting a new entry exceeds the limit:
+ *        - If all entries share the same bucket timestamp (same high-resolution time window),
+ *          the entire vector is moved into a RAX bucket as a single node.
+ *        - Otherwise, each vector entry is redistributed into the new RAX structure.
+ *
+ *  - VSET_BUCKET_RAX:
+ *      A radix tree (RAX) used for scalable management of multiple time-based buckets.
+ *      Entries are inserted by computing their bucket key based on their expiration timestamp.
+ *
+ * The function uses the entry’s expiration time (provided via the getExpiry function)
+ * to determine the correct bucket. It promotes bucket types as needed to maintain
+ * sorted and efficient storage.
+ *
+ * In all cases, if the insertion causes a structural change (e.g., bucket promotion),
+ * the pointer to the root of the bucket tree is updated via the `set` pointer.
+ *
+ * This function always returns true, as insertion is guaranteed to succeed
+ * (barring internal memory allocation failure, which is outside its concern).
+ *
+ * Notes:
+ *  - Buckets are upgraded in-place based on size and time span distribution.
+ *  - Vector buckets allow binary search insertion to maintain order.
+ *  - Tagged pointers are used to determine bucket types efficiently.
+ *  - It is assumed that all entries have odd-valued pointers (LSB set).
+ *  - Key encoding in RAX is based on the maximum expiration timestamp
+ *    that falls within a fixed window granularity.
+ *
+ * Example:
+ *     vset *myset = NULL;
+ *     vsetAddEntry(&myset, extract_expiry, my_object);
+ *
+ *     // Internally, my_object is placed into the appropriate bucket. */
 bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry) {
     long long expiry = getExpiry(entry);
     vsetBucket *expiry_buckets = *set;
@@ -1098,10 +1146,102 @@ static inline bool vsetRemoveEntryWithExpiry(vset *set, vsetGetExpiryFunc getExp
     return removed;
 }
 
+/* Removes an entry from the volatile set (vset), based on its expiration time.
+ *
+ * The volatile set organizes entries into time-based buckets of varying types:
+ * SINGLE, VECTOR, or RAX. The bucket type determines how entries are stored
+ * and managed internally. This function will locate and remove the entry
+ * from its appropriate bucket.
+ *
+ * The removal process works as follows:
+ *
+ *  1. The expiration timestamp of the entry is used to compute which bucket
+ *     (based on its end time) the entry should reside in.
+ *
+ *  2. Depending on the current top-level bucket type of the vset, the function
+ *     dispatches to the appropriate removal handler:
+ *
+ *     - VSET_BUCKET_SINGLE:
+ *         If the stored entry matches, the bucket is set to NONE.
+ *
+ *     - VSET_BUCKET_VECTOR:
+ *         Performs a binary search to find and remove the entry from the vector.
+ *         If the resulting vector size drops to 1, it is converted to a SINGLE bucket.
+ *         If the vector becomes empty, it is removed entirely (set to NONE).
+ *
+ *     - VSET_BUCKET_RAX:
+ *         The function decodes the appropriate bucket key (based on the expiration
+ *         time), looks up the RAX node, and dispatches removal to the sub-bucket.
+ *         If a sub-bucket becomes empty or has only one entry left, its bucket
+ *         type may be downgraded (e.g., to SINGLE or removed).
+ *
+ *  3. If the removal results in a structural change (e.g., shrinking a bucket),
+ *     the bucket type may be changed, and the root pointer is updated accordingly.
+ *
+ *  4. If the entry is not found in the expected bucket, no action is taken.
+ *
+ * Notes:
+ *  - Buckets self-adjust during removal for memory efficiency.
+ *  - The vector bucket keeps entries sorted for fast search/removal.
+ *  - RAX-based sets support a large number of buckets and scale well
+ *    with many time windows.
+ *  - Entries are assumed to have pointer identity (odd-valued pointers).
+ *  - Correct expiration timestamp must be provided for accurate removal.
+ *
+ * Return value:
+ *     Returns true if the entry was found and removed successfully.
+ *     Returns false if the entry was not found.
+ *
+ * Example usage:
+ *     vsetRemoveEntry(myset, extract_expiry, my_object);
+ *
+ *     // my_object is removed from the appropriate bucket in myset BUT is not freed. */
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry) {
     return vsetRemoveEntryWithExpiry(set, getExpiry, entry, getExpiry(entry));
 }
 
+/**
+ * Updates an existing entry in the volatile set (vset), optionally replacing it
+ * with a new entry and expiration time.
+ *
+ * This function provides a unified interface for removing an old entry and
+ * adding a new one. It supports three main cases:
+ *
+ *  1. Entry identity or expiry time didn't change:
+ *     If the `old_entry` and `new_entry` are the same, and their expiration
+ *     timestamps are also equal, the function returns early with no action taken.
+ *
+ *  2. Removal of the old entry:
+ *     If `old_entry` is provided (i.e., not NULL) and its old expiration time
+ *     is valid (`old_expiry != -1`), the function will remove it from the set.
+ *
+ *     Note: Since the object might already be deallocated (or changed), the
+ *     expiration time is passed explicitly as an argument, rather than
+ *     relying on `getExpiry(old_entry)` which might not be safe to call.
+ *
+ *  3. Insertion of the new entry:
+ *     If `new_entry` is provided (i.e., not NULL) and its new expiration time
+ *     is valid (`new_expiry != -1`), the function will insert it into the set.
+ *
+ * The function assumes both `vsetRemoveEntryWithExpiry()` and
+ * `vsetAddEntry()` succeed. It uses assertions to enforce this at runtime,
+ * assuming this function is used in trusted code paths.
+ *
+ * Notes:
+ *  - The update is not atomic. If the removal fails (assertion fails),
+ *    insertion of the new entry does not occur.
+ *  - If the new entry is the same as the old one, but the expiry changed,
+ *    the entry is effectively reinserted in the correct bucket.
+ *  - This is useful for renewal or replacement logic where entries may
+ *    need to change time buckets due to updated TTLs or key mutation.
+ *
+ * Return value:
+ *     Always returns true on success.
+ *     In case of assertion failures, the program will abort.
+ *
+ * Example usage:
+ *     vsetUpdateEntry(myset, getExpiry, old_ptr, new_ptr, old_ts, new_ts);
+ */
 bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     /* Nothing to do */
     if (old_entry == new_entry && old_expiry == new_expiry)
@@ -1170,14 +1310,58 @@ static void *vsetGetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_
     return entry;
 }
 
+/* Retrieves and removes the first expired entry from the volatile set.
+ *
+ * This is a public-facing convenience wrapper around vsetGetFirstExpired()
+ * with delete=true. It performs a "pop" operation, returning the first
+ * expired entry (if any) and removing it from the underlying structure.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set.
+ *   - getExpiry: Function used to extract the expiry timestamp from an entry.
+ *   - now: Current time in milliseconds. Used in order to compare the entries time against
+ *          to decide if they are expired or not.
+ *
+ * Returns:
+ *   - The first expired entry, or NULL if no expired entries are present.*/
 void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
     return vsetGetFirstExpired(set, getExpiry, now, true);
 }
 
+/* Retrieves (but does not remove) the first expired entry from the volatile set.
+ *
+ * This function is useful when the caller wants to inspect the next item
+ * scheduled for expiration without mutating the underlying set.
+ *
+ * Internally calls vsetGetFirstExpired() with delete=false.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set.
+ *   - getExpiry: Function used to extract the expiry timestamp from an entry.
+ *   - now: Current time in milliseconds. Used in order to compare the entries time against
+ *          to decide if they are expired or not.
+ *
+ * Returns:
+ *   - The first expired entry, or NULL if no expired entries are present.*/
 void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
     return vsetGetFirstExpired(set, getExpiry, now, false);
 }
 
+/* Advances the volatile set iterator to the next entry.
+ *
+ * This function handles iteration over various bucket types in the set. It attempts
+ * to return the next valid entry, updating the iterator state accordingly.
+ *
+ * If the current bucket is exhausted, the iterator automatically switches back to
+ * the parent bucket (typically used when iterating nested structures, such as RAX buckets).
+ *
+ * Parameters:
+ *   - it: Pointer to an initialized vsetIterator.
+ *   - entryptr: Output pointer to receive the next entry.
+ *
+ * Returns:
+ *   - true if a next entry is found.
+ *   - false if iteration is complete. */
 bool vsetNext(vsetIterator *it, void **entryptr) {
     vsetBucket *bucket = it->bucket;
     int bucket_type = vsetBucketType(bucket);
@@ -1210,6 +1394,15 @@ bool vsetNext(vsetIterator *it, void **entryptr) {
     return ret == 1;
 }
 
+/* Initializes a volatile set iterator.
+ *
+ * This function prepares the iterator for scanning a volatile set from the beginning.
+ * It sets the internal state, pointing to the main set bucket, and uses VSET_BUCKET_NONE
+ * as an initial placeholder to transition correctly into the actual bucket logic.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set to iterate.
+ *   - it: Pointer to a vsetIterator structure to initialize. */
 void vsetStart(vset *set, vsetIterator *it) {
     it->iteration_state = VSET_BUCKET_NONE; /*lets start by going to the first bucket. */
     it->bucket = *set;
@@ -1217,6 +1410,13 @@ void vsetStart(vset *set, vsetIterator *it) {
     it->parent_bucket = vsetBucketFromNone();
 }
 
+/* Finalizes and cleans up an active volatile set iterator.
+ *
+ * Some internal iterators (e.g., RAX, hashtable) allocate temporary state.
+ * This function ensures proper cleanup of those structures when the iteration is done.
+ *
+ * Parameters:
+ *   - it: Pointer to the vsetIterator that was previously initialized with vsetStart(). */
 void vsetStop(vsetIterator *it) {
     int bucket_type = vsetBucketType(it->bucket);
     int parent_bucket_type = vsetBucketType(it->parent_bucket);
@@ -1226,18 +1426,43 @@ void vsetStop(vsetIterator *it) {
         hashtableResetIterator(&it->hiter);
 }
 
+/* Initializes an empty volatile set.
+ *
+ * The function sets the set to its initial state by assigning a "NONE" bucket.
+ * This is the starting point for all volatile sets before entries are inserted.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set to initialize. */
 void vsetInit(vset *set) {
     *set = vsetBucketFromNone();
 }
 
-/* Free all the vset memory used in order to reference the entries.
- * Since the set only holds references to entries the entries themselves are NOT freed */
+/* Clears the volatile set, freeing all memory used for internal buckets.
+ *
+ * This function deallocates all internal data structures used by the set (buckets, vectors,
+ * hash tables, etc.). It does NOT free the entries themselves, since the set only holds
+ * references.
+ *
+ * After this call, the set is reset to an empty state.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set to clear. */
 void vsetClear(vset *set) {
     if (!(*set)) return;
     freeVsetBucket(*set);
     *set = vsetBucketFromNone();
 }
 
+/* Checks whether a volatile set is empty.
+ *
+ * This function simply checks if the set's current bucket type is VSET_BUCKET_NONE.
+ *
+ * Parameters:
+ *   - set: Pointer to the volatile set.
+ *
+ * Returns:
+ *   - true if the set contains no entries.
+ *   - false otherwise. */
 bool vsetIsEmpty(vset *set) {
     return vsetBucketType(*set) == VSET_BUCKET_NONE;
 }
