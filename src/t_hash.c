@@ -371,7 +371,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             long long entry_expiry = entryGetExpiry(existing);
             /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
              * and treat it like it did not exist. */
-            int is_expired = timestampIsExpired(entry_expiry);
+            bool is_expired = timestampIsExpired(entry_expiry);
             if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
                 /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
                 expiry = entry_expiry;
@@ -1074,7 +1074,7 @@ void hsetexCommand(client *c) {
     robj *expire = NULL;
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
-    int flags = OBJ_NO_FLAGS;
+    int flags = ARGS_NO_FLAGS;
     int fields_index = 0;
     long long num_fields = 0;
     long long when = EXPIRY_NONE;
@@ -1103,7 +1103,7 @@ void hsetexCommand(client *c) {
         return;
 
     /* Check for object existence condition */
-    if ((flags & OBJ_SET_NX && o) || (flags & OBJ_SET_XX && !o)) {
+    if ((flags & ARGS_SET_NX && o) || (flags & ARGS_SET_XX && !o)) {
         addReply(c, shared.czero);
         return;
     }
@@ -1114,24 +1114,24 @@ void hsetexCommand(client *c) {
     }
 
     /* Handle parsing and calculating the expiration time. */
-    if (flags & OBJ_KEEPTTL)
+    if (flags & ARGS_KEEPTTL)
         set_flags |= HASH_SET_KEEP_EXPIRY;
     else if (expire) {
-        long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
+        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
+        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
         }
     }
 
     /* Check for all fields condition */
-    if (flags & (OBJ_SET_FNX | OBJ_SET_FXX)) {
+    if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
         for (i = fields_index; i < c->argc; i += 2) {
-            if (((flags & OBJ_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
-                ((flags & OBJ_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
                 addReply(c, shared.czero);
                 return;
             }
@@ -1168,7 +1168,7 @@ void hsetexCommand(client *c) {
         } else if (expire) {
             /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
              * EX/PX/EXAT flag. */
-            if (!(flags & OBJ_PXAT)) {
+            if (!(flags & ARGS_PXAT)) {
                 for (int i = 2; i < fields_index; i++) {
                     if (c->argv[i + 1] == expire) {
                         robj *milliseconds_obj = createStringObjectFromLongLong(when);
@@ -1200,7 +1200,7 @@ void hgetexCommand(client *c) {
     robj *expire = NULL;
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
-    int flags = OBJ_NO_FLAGS;
+    int flags = ARGS_NO_FLAGS;
     int fields_index = 0;
     long long num_fields = -1;
     long long when = EXPIRY_NONE;
@@ -1230,15 +1230,15 @@ void hgetexCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     /* Handle parsing and calculating the expiration time. */
-    if (flags & OBJ_PERSIST) {
+    if (flags & ARGS_PERSIST) {
         persist = 1;
     } else if (expire) {
-        long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
+        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
+        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
             when = 0;
         } else {
