@@ -198,7 +198,7 @@
  *
  *                    SINGLE
  *                      |
- *                      v  
+ *                      v
  *                    VECTOR (sorted, up to 127, can split
  *                      |     into multiple vectors)
  *                      |

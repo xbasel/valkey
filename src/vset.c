@@ -988,11 +988,11 @@ static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, v
         if (pop) {
             uint32_t idx = pvFind(pv, entry);
             if (idx < vlen) {
-                void *poped_entry = NULL;
+                void *popped_entry = NULL;
                 pvSwap(pv, idx, pvLen(pv) - 1);
                 success = true;
-                new_bucket = vsetBucketFromVector(pvPop(pv, &poped_entry));
-                assert(poped_entry == entry);
+                new_bucket = vsetBucketFromVector(pvPop(pv, &popped_entry));
+                assert(popped_entry == entry);
             }
         } else if (pvRemove(&pv, entry)) {
             success = true;
