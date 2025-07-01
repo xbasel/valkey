@@ -51,14 +51,8 @@ static vset *hashTypeGetVolatileSet(robj *o) {
     return (vset *)hashtableMetadata(o->ptr);
 }
 
-void hashTypeFreeVolatileSet(robj *o) {
-    vset *set = hashTypeGetVolatileSet(o);
-    if (set)
-        vsetClear(set);
-}
-
 bool hashTypeHasVolatileElements(robj *o) {
-    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
+    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && !(vsetIsEmpty(hashTypeGetVolatileSet(o))));
 }
 
 /* make any access to the hash object elements ignore the specific elements expiration.
@@ -84,7 +78,7 @@ static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     return vset;
 }
 
-static void hashTypeDeleteVolatileSet(robj *o) {
+void hashTypeFreeVolatileSet(robj *o) {
     vset *vset = hashtableMetadata(o->ptr);
     vsetClear(vset);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
@@ -102,7 +96,7 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
     debugServerAssert(set);
     serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
     if (vsetIsEmpty(set)) {
-        hashTypeDeleteVolatileSet(o);
+        hashTypeFreeVolatileSet(o);
     }
 }
 
@@ -119,7 +113,7 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
 
     if (vsetIsEmpty(set)) {
-        hashTypeDeleteVolatileSet(o);
+        hashTypeFreeVolatileSet(o);
     }
 }
 
