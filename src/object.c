@@ -28,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
 #include "serverassert.h"
 #include "functions.h"
@@ -1201,10 +1202,11 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             hashtable *ht = o->ptr;
             hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
             hashtableInitIterator(&iter, ht, 0);
             void *next;
 
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+            asize = sizeof(*o) + hashtableMemUsage(ht) + vsetMemUsage(volatile_fields);
             while (hashtableNext(&iter, &next) && samples < sample_size) {
                 elesize += entryMemUsage(next);
                 samples++;

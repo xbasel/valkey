@@ -311,5 +311,5 @@ void vsetInit(vset *set);
 void vsetClear(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
-
+size_t vsetMemUsage(vset *set);
 #endif

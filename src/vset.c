@@ -1216,9 +1216,8 @@ static inline size_t vsetBucketPopExpired_RAX(vsetBucket **bucket, vsetGetExpiry
             /* in case the bucket is freed, we can just remove it and continue to the next bucket. */
             raxRemove(buckets, key, key_len, NULL);
         } else {
-            /* in case the bucket still exists, it must be since we reached the max_count.
+            /* in case the bucket still exists, it must be since we reached the max_count or stopped due to expiry function.
              * So we save the new bucket to the rax and bail. */
-            assert(max_count == count);
             raxSetData(node, time_bucket);
             break;
         }
@@ -1303,6 +1302,55 @@ static inline int vsetBucketNext_RAX(vsetIterator *it, void **entryptr) {
         return 0;
     }
     return 1;
+}
+
+static inline size_t vsetBucketMemUsage_NONE(vsetBucket *bucket) {
+    UNUSED(bucket);
+    return 0;
+}
+
+static inline size_t vsetBucketMemUsage_SINGLE(vsetBucket *bucket) {
+    UNUSED(bucket);
+    return 0;
+}
+
+static inline size_t vsetBucketMemUsage_VECTOR(vsetBucket *bucket) {
+    pVector *pv = vsetBucketVector(bucket);
+    assert(pv);
+    return pv->alloc;
+}
+
+static inline size_t vsetBucketMemUsage_HASHTABLE(vsetBucket *bucket) {
+    hashtable *ht = vsetBucketHashtable(bucket);
+    return hashtableMemUsage(ht);
+}
+
+static inline size_t vsetBucketMemUsage_RAX(vsetBucket *bucket) {
+    rax *r = vsetBucketRax(bucket);
+    size_t total_mem = raxAllocSize(r);
+    raxIterator it;
+    raxStart(&it, r);
+    assert(raxSeek(&it, "^", NULL, 0));
+    while (raxNext(&it)) {
+        switch (vsetBucketType(it.data)) {
+        case VSET_BUCKET_NONE:
+            total_mem += vsetBucketMemUsage_NONE(it.data);
+            break;
+        case VSET_BUCKET_SINGLE:
+            total_mem += vsetBucketMemUsage_SINGLE(it.data);
+            break;
+        case VSET_BUCKET_VECTOR:
+            total_mem += vsetBucketMemUsage_VECTOR(it.data);
+            break;
+        case VSET_BUCKET_HT:
+            total_mem += vsetBucketMemUsage_HASHTABLE(it.data);
+            break;
+        default:
+            panic("Unknown bucket type encountered in vsetBucketMemUsage_HASHTABLE");
+        }
+    }
+    raxStop(&it);
+    return total_mem;
 }
 
 /* Adds an entry to a volatile set (vset) based on its expiration time.
@@ -1695,6 +1743,25 @@ bool vsetNext(vsetIterator *it, void **entryptr) {
         return vsetNext(it, entryptr);
     }
     return ret == 1;
+}
+
+size_t vsetMemUsage(vset *set) {
+    int bucket_type = vsetBucketType(*set);
+    switch (bucket_type) {
+    case VSET_BUCKET_NONE:
+        return vsetBucketMemUsage_NONE(*set);
+    case VSET_BUCKET_SINGLE:
+        return vsetBucketMemUsage_SINGLE(*set);
+    case VSET_BUCKET_VECTOR:
+        return vsetBucketMemUsage_VECTOR(*set);
+    case VSET_BUCKET_HT:
+        panic("Unsupported hashtable bucket type for vset");
+    case VSET_BUCKET_RAX:
+        return vsetBucketMemUsage_RAX(*set);
+    default:
+        panic("Unknown set type encountered in vsetMemUsage");
+    }
+    return 0;
 }
 
 /* Initializes a volatile set iterator.
