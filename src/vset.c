@@ -531,6 +531,12 @@ static int vsetCompareEntries(const void *a, const void *b) {
     return (ea > eb) - (ea < eb);
 }
 
+/* used for popping form rax bucket where we KNOW all entries are expired. */
+static long long vsetGetExpiryZero(const void *entry) {
+    UNUSED(entry);
+    return 0;
+}
+
 static inline long long get_bucket_ts(long long expiry) {
     return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MIN;
 }
@@ -954,7 +960,7 @@ static inline vsetBucket *removeFromBucket_SINGLE(vsetGetExpiryFunc getExpiry, v
     }
 }
 
-static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, void *entry, long long expiry, bool *removed) {
+static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, void *entry, long long expiry, bool *removed, bool pop) {
     UNUSED(getExpiry);
     UNUSED(expiry);
 
@@ -977,7 +983,18 @@ static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, v
             pvFree(pv);
         }
     } else {
-        if (pvRemove(&pv, entry)) {
+        /* pop is a more efficient way to remove an element from the vector. However it may
+         * change the order of the elements in the vector, so we should ask the user to indicate if to use pop or not. */
+        if (pop) {
+            uint32_t idx = pvFind(pv, entry);
+            if (idx < vlen) {
+                void *poped_entry = NULL;
+                pvSwap(pv, idx, pvLen(pv) - 1);
+                success = true;
+                new_bucket = vsetBucketFromVector(pvPop(pv, &poped_entry));
+                assert(poped_entry == entry);
+            }
+        } else if (pvRemove(&pv, entry)) {
             success = true;
             new_bucket = vsetBucketFromVector(pv);
         }
@@ -1009,7 +1026,7 @@ static inline vsetBucket *removeFromBucket_HASHTABLE(vsetGetExpiryFunc getExpiry
     if (removed) *removed = success;
     return new_bucket;
 }
-static bool removeEntryBucketFromRaxBucket(vsetBucket *rax_bucket, vsetGetExpiryFunc getExpiry, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
+static bool removeEntryFromRaxBucket(vsetBucket *rax_bucket, vsetGetExpiryFunc getExpiry, void *entry, vsetBucket *bucket, unsigned char *key, size_t key_len, vsetBucket **pbucket, raxNode *node) {
     bool removed = false;
     switch (vsetBucketType(bucket)) {
     case VSET_BUCKET_SINGLE:
@@ -1020,7 +1037,7 @@ static bool removeEntryBucketFromRaxBucket(vsetBucket *rax_bucket, vsetGetExpiry
         }
         break;
     case VSET_BUCKET_VECTOR: {
-        vsetBucket *new_bucket = removeFromBucket_VECTOR(getExpiry, bucket, entry, 0, &removed);
+        vsetBucket *new_bucket = removeFromBucket_VECTOR(getExpiry, bucket, entry, 0, &removed, true);
         if (new_bucket != bucket) {
             if (!new_bucket) {
                 raxRemove(vsetBucketRax(rax_bucket), key, key_len, NULL);
@@ -1045,10 +1062,40 @@ static bool removeEntryBucketFromRaxBucket(vsetBucket *rax_bucket, vsetGetExpiry
         break;
     }
     default:
-        panic("Unknown bucket type for removeEntryBucketFromRaxBucket");
+        panic("Unknown bucket type for removeEntryFromRaxBucket");
         return false;
     }
     return removed;
+}
+
+static inline bool shrinkRaxBucketIfPossible(vsetBucket **target, vsetGetExpiryFunc getExpiry) {
+    rax *expiry_buckets = vsetBucketRax(*target);
+    if (raxSize(expiry_buckets) == 1) {
+        raxIterator it;
+        raxStart(&it, expiry_buckets);
+        assert(raxSeek(&it, "^", NULL, 0));
+        assert(raxNext(&it));
+        vsetBucket *bucket = it.data;
+        int bucket_type = vsetBucketType(bucket);
+        raxStop(&it);
+        /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
+         * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
+        if (bucket_type == VSET_BUCKET_SINGLE ||
+            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
+            if (bucket_type == VSET_BUCKET_VECTOR) {
+                pVector *pv = vsetBucketVector(bucket);
+                /* first lets sort the vector. we cannot set the target bucket as unsorted vector bucket */
+                vsetSetExpiryGetter(getExpiry);
+                pvSort(pv, vsetCompareEntries);
+                vsetUnsetExpiryGetter();
+            }
+            /* lets make our bucket to be the only left bucket */
+            *target = bucket;
+            raxFree(expiry_buckets);
+            return true;
+        }
+    }
+    return false;
 }
 
 static inline vsetBucket *removeFromBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBucket *target, void *entry, long long expiry, bool *removed) {
@@ -1059,27 +1106,130 @@ static inline vsetBucket *removeFromBucket_RAX(vsetGetExpiryFunc getExpiry, vset
     rax *expiry_buckets = vsetBucketRax(target);
     vsetBucket *bucket = findBucket(expiry_buckets, expiry, key, &key_len, &bucket_ts, &node);
     assert(bucket);
-    bool success = removeEntryBucketFromRaxBucket(target, getExpiry, entry, bucket, key, key_len, NULL, node);
+    bool success = removeEntryFromRaxBucket(target, getExpiry, entry, bucket, key, key_len, NULL, node);
     if (removed) *removed = success;
     // shrink to single bucket if possible
-    if (raxSize(expiry_buckets) == 1) {
+    shrinkRaxBucketIfPossible(&target, getExpiry);
+    return target;
+}
+
+static inline size_t vsetBucketMultiPopExpired_NONE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    UNUSED(bucket);
+    UNUSED(getExpiry);
+    UNUSED(expiryFunc);
+    UNUSED(now);
+    UNUSED(max_count);
+    UNUSED(ctx);
+    return 0;
+}
+
+static inline size_t vsetBucketMultiPopExpired_SINGLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    void *entry = vsetBucketSingle(*bucket);
+    if (max_count && getExpiry(entry) <= now && expiryFunc(entry, ctx)) {
+        freeVsetBucket(*bucket);
+        *bucket = vsetBucketFromNone();
+        return 1;
+    }
+    return 0;
+}
+
+static inline size_t vsetBucketMultiPopExpired_VECTOR(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    pVector *pv = vsetBucketVector(*bucket);
+    uint32_t len = min(pvLen(pv), max_count);
+    uint32_t i = 0;
+    for (; i < len; i++) {
+        void *entry = pvGet(pv, i);
+        /* break as soon as the expiryFunc stops us OR we reached an entry which is not expired */
+        if (getExpiry(entry) > now || !(expiryFunc(entry, ctx)))
+            break;
+    }
+    pVector *new_pv = pvSplit(&pv, i);
+    *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());
+    pvFree(pv);
+    return i;
+}
+
+static inline size_t vsetBucketMultiPopExpired_HASHTABLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    UNUSED(getExpiry);
+    UNUSED(now);
+    hashtable *ht = vsetBucketHashtable(*bucket);
+    hashtableIterator it;
+    void *entry = NULL;
+    size_t expired = 0;
+    hashtableInitIterator(&it, ht, HASHTABLE_ITER_SAFE);
+    while (hashtableNext(&it, &entry)) {
+        if (expired < max_count && expiryFunc(entry, ctx)) {
+            hashtableDelete(ht, entry);
+            expired++;
+            entry = NULL;
+        } else
+            break;
+    }
+    hashtableResetIterator(&it);
+
+    /* in case we completed scanning the hashtable or a single element is left, we can convert the hashtable. */
+    size_t ht_size = hashtableSize(ht);
+    if (ht_size == 0) {
+        hashtableRelease(ht);
+        *bucket = vsetBucketFromNone();
+    } else if (ht_size == 1) {
+        assert(entry);
+        *bucket = vsetBucketFromSingle(entry);
+    }
+    return expired;
+}
+
+static inline size_t vsetBucketMultiPopExpired_RAX(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    UNUSED(getExpiry);
+    rax *buckets = vsetBucketRax(*bucket);
+    size_t count = 0;
+    while (count < max_count && raxSize(buckets) > 0) {
         raxIterator it;
-        raxStart(&it, expiry_buckets);
-        assert(raxSeek(&it, "^", NULL, 0));
+        raxStart(&it, buckets);
+        raxSeek(&it, "^", NULL, 0);
         assert(raxNext(&it));
-        bucket = it.data;
-        int bucket_type = vsetBucketType(bucket);
+        /* lets start again by going into the first bucket. */
+        unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
+        vsetBucket *time_bucket = it.data;
+        int time_bucket_type = vsetBucketType(time_bucket);
+        long long time_bucket_ts = decodeExpiryKey(it.key);
+        memcpy(key, it.key, it.key_len);
+        size_t key_len = it.key_len;
+        raxNode *node = it.node;
         raxStop(&it);
-        /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
-         * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
-        if (bucket_type == VSET_BUCKET_SINGLE ||
-            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
-            /* lets make our bucket to be the only left bucket */
-            target = bucket;
-            raxFree(expiry_buckets);
+        if (time_bucket_ts > now)
+            break;
+        switch (time_bucket_type) {
+        case VSET_BUCKET_SINGLE:
+            count += vsetBucketMultiPopExpired_SINGLE(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
+            break;
+        case VSET_BUCKET_VECTOR:
+            count += vsetBucketMultiPopExpired_VECTOR(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
+            break;
+        case VSET_BUCKET_HT:
+            count += vsetBucketMultiPopExpired_HASHTABLE(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
+            break;
+        default:
+            panic("Cannot expire entries from bucket which is not single, vector or hashtable");
+        }
+        if (!time_bucket) {
+            /* in case the bucket is freed, we can just remove it and continue to the next bucket. */
+            raxRemove(buckets, key, key_len, NULL);
+        } else {
+            /* in case the bucket still exists, it must be since we reached the max_count.
+             * So we save the new bucket to the rax and bail. */
+            assert(max_count == count);
+            raxSetData(node, time_bucket);
+            break;
         }
     }
-    return target;
+    /* if all buckets are removed, */
+    if (raxSize(buckets) == 0) {
+        raxFree(buckets);
+        *bucket = vsetBucketFromNone();
+    }
+    shrinkRaxBucketIfPossible(bucket, getExpiry);
+    return count;
 }
 
 static int vsetBucketNext_NONE(vsetIterator *it, void **entryptr) {
@@ -1087,6 +1237,7 @@ static int vsetBucketNext_NONE(vsetIterator *it, void **entryptr) {
     UNUSED(entryptr);
     return 0;
 }
+
 static inline int vsetBucketNext_SINGLE(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
     if (init_bucket_scan) {
@@ -1097,6 +1248,7 @@ static inline int vsetBucketNext_SINGLE(vsetIterator *it, void **entryptr) {
     }
     return 0;
 }
+
 static inline int vsetBucketNext_VECTOR(vsetIterator *it, void **entryptr) {
     bool init_bucket_scan = (it->iteration_state == VSET_BUCKET_NONE);
     pVector *pv = vsetBucketVector(it->bucket);
@@ -1268,7 +1420,7 @@ static inline bool vsetRemoveEntryWithExpiry(vset *set, vsetGetExpiryFunc getExp
         bucket = removeFromBucket_SINGLE(getExpiry, bucket, entry, expiry, &removed);
         break;
     case VSET_BUCKET_VECTOR:
-        bucket = removeFromBucket_VECTOR(getExpiry, bucket, entry, expiry, &removed);
+        bucket = removeFromBucket_VECTOR(getExpiry, bucket, entry, expiry, &removed, false);
         break;
     case VSET_BUCKET_HT:
         bucket = removeFromBucket_HASHTABLE(getExpiry, bucket, entry, expiry, &removed);
@@ -1395,93 +1547,107 @@ bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, vo
     return true;
 }
 
-static void *vsetGetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now, bool delete) {
+/* vsetPopExpired - Remove expired entries from a volatile set up to a maximum count.
+ *
+ * Parameters:
+ *     set: Pointer to the volatile set (vset *) to operate on.
+ *     getExpiry: Function to retrieve the expiration time from an entry.
+ *     expiryFunc: Function to call on each expired entry (e.g., to free or notify).
+ *     now: Current time in milliseconds used to compare against expiry times.
+ *     max_count: Maximum number of expired entries to remove.
+ *     ctx: Opaque context pointer passed through to the expiryFunc callback.
+ *
+ * This function delegates expiration popping to a type-specific handler based on the
+ * internal bucket type of the set. It supports various bucket encodings:
+ *   - NONE
+ *   - SINGLE
+ *   - VECTOR
+ *   - RAX (radix tree)
+ *   - HT (hashtable)
+ *
+ * Returns the number of expired entries successfully removed (and passed to expiryFunc).
+ *
+ * Panics if the bucket type is unknown or unsupported.
+ *
+ * Return:
+ *     Number of expired entries removed (size_t). */
+size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
+    vsetBucket *bucket = *set;
+    int bucket_type = vsetBucketType(bucket);
+    switch (bucket_type) {
+    case VSET_BUCKET_NONE:
+        return vsetBucketMultiPopExpired_NONE(set, getExpiry, expiryFunc, now, max_count, ctx);
+        break;
+    case VSET_BUCKET_RAX:
+        return vsetBucketMultiPopExpired_RAX(set, getExpiry, expiryFunc, now, max_count, ctx);
+        break;
+    case VSET_BUCKET_SINGLE:
+        return vsetBucketMultiPopExpired_SINGLE(set, getExpiry, expiryFunc, now, max_count, ctx);
+        break;
+    case VSET_BUCKET_VECTOR:
+        return vsetBucketMultiPopExpired_VECTOR(set, getExpiry, expiryFunc, now, max_count, ctx);
+        break;
+    case VSET_BUCKET_HT:
+        return vsetBucketMultiPopExpired_HASHTABLE(set, getExpiry, expiryFunc, now, max_count, ctx);
+        break;
+    default:
+        panic("Unknown volatile set bucket type in vsetPopExpired");
+    }
+    return 0;
+}
+
+/* vsetEstimatedEarliestExpiry - Estimate the earliest expiration time in a volatile set.
+ *
+ * Parameters:
+ *     set: Pointer to the volatile set (vset *) to inspect.
+ *     getExpiry: Callback function used to extract the expiration time from a set entry.
+ *
+ * Returns the earliest expiration time based on the structure of the volatile set.
+ * This is an *approximate* value:
+ *   - For bucketed types (e.g., radix tree, vector), it returns the expiry of the first bucket or entry,
+ *     which may not be the actual earliest expiring item.
+ *   - For single-entry sets, it returns the expiry of the sole item.
+ *   - For VSET_BUCKET_NONE, it returns -1 to indicate there is no data.
+ *
+ * Supported bucket types:
+ *   - VSET_BUCKET_SINGLE
+ *   - VSET_BUCKET_VECTOR
+ *   - VSET_BUCKET_RAX
+ *
+ * Panics if called with an unsupported bucket type.
+ *
+ * Return:
+ *     Estimated earliest expiry time in milliseconds, or -1 if the set is empty. */
+long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry) {
     int set_type = vsetBucketType(*set);
     void *entry = NULL;
     long long expiry;
     switch (set_type) {
     case VSET_BUCKET_NONE:
-        return NULL;
+        return -1;
         break;
     case VSET_BUCKET_RAX: {
-        vsetIterator iter;
-        vsetStart(set, &iter);
-        assert(vsetBucketNext_RAX(&iter, &entry));
-        long long bucket_ts = iter.bucket_ts;
-        vsetStop(&iter);
-        if (bucket_ts > now)
-            return NULL;
-        expiry = getExpiry(entry);
-        assert(expiry <= now);
+        rax *r = vsetBucketRax(set);
+        raxIterator it;
+        raxStart(&it, r);
+        expiry = decodeExpiryKey(it.key);
+        raxStop(&it);
         break;
     }
     case VSET_BUCKET_SINGLE: {
         entry = vsetBucketSingle(*set);
         expiry = getExpiry(entry);
-        if (expiry > now)
-            return NULL;
         break;
     }
     case VSET_BUCKET_VECTOR: {
         entry = pvGet(vsetBucketVector(*set), 0);
         expiry = getExpiry(entry);
-        if (expiry > now)
-            return NULL;
-        break;
-    }
-    case VSET_BUCKET_HT: {
-        hashtableIterator iter;
-        hashtableInitIterator(&iter, vsetBucketHashtable(*set), 0);
-        assert(hashtableNext(&iter, &entry));
-        hashtableResetIterator(&iter);
-        expiry = getExpiry(entry);
-        if (expiry > now)
-            return NULL;
         break;
     }
     default:
-        panic("Unknown volatile set bucket type in vsetNext");
+        panic("Unsupported vset encoding type. Only supported types are single, vector or rax");
     }
-    if (delete)
-        assert(vsetRemoveEntry(set, getExpiry, entry));
-    return entry;
-}
-
-/* Retrieves and removes the first expired entry from the volatile set.
- *
- * This is a public-facing convenience wrapper around vsetGetFirstExpired()
- * with delete=true. It performs a "pop" operation, returning the first
- * expired entry (if any) and removing it from the underlying structure.
- *
- * Parameters:
- *   - set: Pointer to the volatile set.
- *   - getExpiry: Function used to extract the expiry timestamp from an entry.
- *   - now: Current time in milliseconds. Used in order to compare the entries time against
- *          to decide if they are expired or not.
- *
- * Returns:
- *   - The first expired entry, or NULL if no expired entries are present.*/
-void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
-    return vsetGetFirstExpired(set, getExpiry, now, true);
-}
-
-/* Retrieves (but does not remove) the first expired entry from the volatile set.
- *
- * This function is useful when the caller wants to inspect the next item
- * scheduled for expiration without mutating the underlying set.
- *
- * Internally calls vsetGetFirstExpired() with delete=false.
- *
- * Parameters:
- *   - set: Pointer to the volatile set.
- *   - getExpiry: Function used to extract the expiry timestamp from an entry.
- *   - now: Current time in milliseconds. Used in order to compare the entries time against
- *          to decide if they are expired or not.
- *
- * Returns:
- *   - The first expired entry, or NULL if no expired entries are present.*/
-void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
-    return vsetGetFirstExpired(set, getExpiry, now, false);
+    return expiry;
 }
 
 /* Advances the volatile set iterator to the next entry.

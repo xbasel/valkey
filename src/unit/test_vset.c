@@ -225,10 +225,10 @@ long long mock_entry_get_expiry(const void *entry) {
     return mockGetExpiry(entry);
 }
 
-int mock_entry_expire(void *db, void *o, void *entry) {
-    UNUSED(db);
-    UNUSED(o);
+int mock_entry_expire(void *entry, void *ctx) {
     mock_entry *e = (mock_entry *)entry;
+    long long now = *(long long *)ctx;
+    TEST_ASSERT(mock_entry_get_expiry(entry) <= now);
     for (int i = 0; i < mock_entry_count; i++) {
         if (mock_entries[i] == e) {
             // printf("expire entry %p with expiry %llu\n", e, mockGetExpiry(e));
@@ -283,16 +283,11 @@ int remove_mock_entry(vset *set) {
     return 0;
 }
 
+
 int expire_mock_entries(vset *set, mstime_t now) {
-    void *entry;
-    do {
-        entry = vsetPopExpired(set, mockGetExpiry, now);
-        if (entry) {
-            // printf("pop expire entry %p with expiry %llu now: %llu\n", entry, mockGetExpiry(entry), now);
-            TEST_ASSERT(mockGetExpiry(entry) <= now);
-            mock_entry_expire(NULL, NULL, entry);
-        }
-    } while (entry);
+    // printf("Before expired entries entries: %d\n", mock_entry_count);
+    vsetPopExpired(set, mockGetExpiry, mock_entry_expire, now, mock_entry_count, &now);
+    // printf("After expired %zu entries left entries: %d and set is empty: %s\n", count, mock_entry_count, vsetIsEmpty(set) ? "true" : "false");
     return 0;
 }
 

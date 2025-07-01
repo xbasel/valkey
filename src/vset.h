@@ -269,6 +269,7 @@
 #define VOLATILESET_VECTOR_BUCKET_MAX_SIZE 127
 
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
+typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
 
 // Generic bucket type
 typedef void vsetBucket;
@@ -301,7 +302,6 @@ typedef struct vsetIterator {
 
 bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
-void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
@@ -310,6 +310,6 @@ bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void vsetInit(vset *set);
 void vsetClear(vset *set);
-
+size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 
 #endif
