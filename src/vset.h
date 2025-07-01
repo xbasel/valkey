@@ -232,9 +232,9 @@
  *                                void *new_entry, long long old_expiry,
  *                                long long new_expiry);
  *
- * Expiry Retrieval:
- *     void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
- *     void *vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+ * Expiry Retrieval/Removal:
+ *     long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
+ *     size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
  *
  * Utilities:
  *     bool vsetIsEmpty(vset *set);
@@ -302,7 +302,6 @@ typedef struct vsetIterator {
 
 bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
-void *vsetFirstExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
 void vsetStart(vset *set, vsetIterator *it);
@@ -310,6 +309,7 @@ bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetStop(vsetIterator *it);
 void vsetInit(vset *set);
 void vsetClear(vset *set);
+long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 
 #endif
