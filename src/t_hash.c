@@ -100,7 +100,7 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
     }
 }
 
-static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -383,7 +383,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
                 serverAssert(replaced);
             }
             hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);
-
+            /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             update = is_expired ? 0 : 1;
         }
         hashTypeIgnoreTTL(o, false);
@@ -409,6 +409,14 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
     if (o == NULL) return -2;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vll;
+        /* We do not want to convert to listpack for no good reason.
+         * So we first check if the item exists.*/
+        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll) < 0) {
+            return -2;
+        }
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
          * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
@@ -418,6 +426,9 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
+
+    /* we must be hashtable encoded */
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = o->ptr;
     void **entry_ref = NULL;
@@ -1069,6 +1080,50 @@ void hsetCommand(client *c) {
     }
 }
 
+/* High-Level Algorithm of HSETEX Command:
+ *
+ * - Parse arguments and options:
+ *   Parses optional flags such as NX, XX, FNX, FXX, KEEPTTL, and expiration time options.
+ *   Ensures the number of specified fields matches the actual provided key-value pairs.
+ *
+ * - Check object existence conditions:
+ *   Depending on NX/XX flags, verifies whether the hash key must or must not exist.
+ *   Exits early with a zero reply if conditions aren't met.
+ *
+ * - Create the hash object if needed:
+ *   If the key does not exist and creation is permitted, allocates a new hash.
+ *
+ * - Handle expiration logic:
+ *   Computes the expiry time (relative or absolute).
+ *   If the expiration is in the past, the command proceeds to delete the relevant fields.
+ *
+ * - Enforce per-field conditions:
+ *   If FNX (field must not exist) or FXX (field must exist) flags are set,
+ *   ensures all fields satisfy these conditions before proceeding.
+ *
+ * - Apply changes:
+ *   Either deletes expired fields or sets fields with optional expiration.
+ *
+ * - Clean up and notify:
+ *   Deletes the key if the hash becomes empty.
+ *   Emits keyspace notifications for changes (see below).
+ *   Modifies the command vector for AOF propagation if necessary.
+ *
+ *
+ * Return Value:
+ * - Returns integer 1 if all fields were successfully updated or deleted.
+ * - Returns integer 0 if no fields were updated due to condition failures.
+ *
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hset"      — Emitted when fields are added or updated.
+ * - "hexpire"   — Emitted when expiration is set on fields.
+ * - "hexpired"  — Emitted when fields are immediately expired and deleted.
+ * - "del"       — Emitted if the entire key is removed (empty hash).
+ *
+ *
+ * Client Reply:
+ * - Integer reply: 1 if all changes succeeded, 0 if no changes occurred. */
 void hsetexCommand(client *c) {
     robj *o;
     robj *expire = NULL;
@@ -1122,7 +1177,7 @@ void hsetexCommand(client *c) {
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
+        if ((when == basetime) || (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && ((when == basetime) || checkAlreadyExpired(when)))) {
             set_expired = 1;
         }
     }
@@ -1160,7 +1215,9 @@ void hsetexCommand(client *c) {
         }
     }
 
+
     if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
@@ -1189,12 +1246,50 @@ void hsetexCommand(client *c) {
         }
         server.dirty += changes;
     } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expired)
+            decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
     }
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 
+/* High-Level Algorithm of HGETEX Command:
+ *
+ * - Parses the command for optional arguments, including expiration options,
+ *   persistence flags, and the list of hash fields to retrieve.
+ *
+ * - Verifies that the number of fields specified matches the actual arguments,
+ *   and ensures the key exists and is a valid hash type.
+ *
+ * - Computes the expiration behavior:
+ *   - If `PERSIST` is provided, removes the expiration from the fields.
+ *   - If an expiration time is specified, calculates it relative or absolute.
+ *     - If already expired, deletes the fields immediately.
+ *     - Otherwise, schedules new expiration timestamps.
+ *
+ * - Retrieves and replies with the values for each requested field.
+ *
+ * - For each field:
+ *   - If expiration is due: deletes the field.
+ *   - If an expiry is scheduled: updates the field's expiration timestamp.
+ *   - If persisting: clears the field's expiration.
+ *
+ * - If any changes were made (deletes, expires, or persists):
+ *   - Rewrites the command vector (for AOF and replication) using HDEL, HPEXPIREAT, or HPERSIST.
+ *   - Issues keyspace notifications accordingly.
+ *   - If the hash becomes empty as a result, deletes the key and notifies.
+ *
+ *
+ * Return Value:
+ * - Always replies with an array of values for the requested fields (including NULLs for missing fields).
+ *
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hexpire"   — When expiration is added to hash fields.
+ * - "hexpired"  — When fields are immediately expired and deleted.
+ * - "hpersist"  — When expiration is removed from fields.
+ * - "del"       — If the hash becomes empty and is removed entirely. */
 void hgetexCommand(client *c) {
     robj *o;
     robj *expire = NULL;
@@ -1238,7 +1333,7 @@ void hgetexCommand(client *c) {
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
+        if ((when == basetime) || (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when))) {
             set_expired = 1;
             when = 0;
         } else {
@@ -1322,6 +1417,10 @@ void hgetexCommand(client *c) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expiry || set_expired || persist) {
+            decrRefCount(c->argv[1]);
+        }
         if (new_argv) zfree(new_argv);
     }
 
@@ -1408,6 +1507,41 @@ static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int c
 }
 
 
+/* High-Level Algorithm of hexpireGenericCommand (used by HEXPIRE, HPEXPIRE, HEXPIREAT, HPEXPIREAT):
+ *
+ * - Parses optional flags and the number of hash fields to apply expiration to.
+ *
+ * - Converts the given expiration time (relative or absolute) into a Unix timestamp.
+ *
+ * - Determines if the given timestamp is already expired:
+ *   - If so, immediately deletes the specified hash fields.
+ *   - If not, updates their expiration metadata.
+ *
+ * - Responds with an array of integers:
+ *   - 1 if the expiration was set.
+ *   - 0 if it was unchanged.
+ *   - -1 if the field does not exist.
+ *   - 2 if the field was immediately expired and deleted.
+ *
+ * - If fields were deleted due to expiration:
+ *   - Rewrites the command as HDEL for replication/AOF.
+ *   - Emits a "hexpired" keyspace event.
+ *
+ * - If expiration was newly set:
+ *   - May rewrite the command as HPEXPIREAT if needed.
+ *   - Emits a "hexpire" keyspace event.
+ *
+ * - If the hash becomes empty after deletions:
+ *   - Deletes the hash key.
+ *   - Emits a "del" event for the key.
+ *
+ * Return Value:
+ * - An array of integers corresponding to the result for each field.
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hexpired" — when fields are immediately expired and deleted.
+ * - "hexpire"  — when fields receive new expiration timestamps.
+ * - "del"      — when the hash key becomes empty and is removed. */
 void hexpireGenericCommand(client *c, long long basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
     long long when; /* unix time in milliseconds when the key will expire. */
@@ -1437,7 +1571,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
 
-    if (checkAlreadyExpired(when))
+    if ((when == basetime) || checkAlreadyExpired(when))
         set_expired = 1;
 
     robj *obj = lookupKeyWrite(c->db, key);
@@ -1521,6 +1655,31 @@ void hpexpireAtCommand(client *c) {
     hexpireGenericCommand(c, 0, UNIT_MILLISECONDS);
 }
 
+/* High-Level Algorithm of HPERSIST Command:
+ *
+ * - Expects a key and a list of hash fields whose expiration metadata should be removed.
+ * - Validates that the number of provided fields matches the declared count.
+ *
+ * - For each specified field:
+ *   - Attempts to remove any existing expiration.
+ *   - Replies with:
+ *     - 1 if the expiration was successfully removed.
+ *     - 0 if the field had no expiration or did not exist.
+ *
+ * - Replies with an array of integers, one per field, indicating the outcome of each attempt.
+ *
+ * - If any expirations were removed:
+ *   - Marks the key as modified (for replication/AOF consistency).
+ *   - Emits a "hpersist" keyspace notification.
+ *
+ *
+ * Return Value:
+ * - An array of integers, each representing the result of persistence for one field.
+ *   - 1 = field existed and expiration was removed.
+ *   - 0 = field did not exist or had no expiration.
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hpersist" — emitted once if any field had its expiration removed. */
 void hpersistCommand(client *c) {
     int fields_index = 4, result = 0, changes = 0;
     long long num_fields = 0;
@@ -1550,6 +1709,34 @@ void hpersistCommand(client *c) {
     }
 }
 
+/* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:
+ *
+ * - These commands return the remaining time to live (TTL) or absolute expiry time
+ *   of one or more fields in a hash.
+ *
+ * - HTTL / HPTTL:
+ *   - Return relative TTL of each field (in seconds or milliseconds).
+ *   - TTL is computed as the difference between current time and expiry time.
+ *
+ * - HEXPIRETIME / HPEXPIRETIME:
+ *   - Return the absolute Unix time at which each field will expire
+ *     (in seconds or milliseconds, depending on the variant).
+ *
+ * For each field requested:
+ *   - If the field or hash does not exist: reply with -2.
+ *   - If the field exists but has no expiration: reply with -1.
+ *   - If the field has an expiration:
+ *     - HTTL / HPTTL: reply with remaining TTL (clamped at 0 if negative).
+ *     - HEXPIRETIME / HPEXPIRETIME: reply with the absolute expiry time.
+ *
+ * Return Value:
+ * - An array of integers, one per field:
+ *   - -2 = hash or field does not exist.
+ *   - -1 = field exists but has no expiration.
+ *   - >=0 = TTL or expiry time, depending on the command variant.
+ *
+ * Keyspace Notifications:
+ * - None emitted; this command is read-only. */
 void httlGenericCommand(client *c, long long basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
