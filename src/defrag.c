@@ -454,16 +454,17 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
         if (entryHasExpiry(new_entry)) {
             robj *obj = (robj *)privdata;
             serverAssert(obj);
-            hashTypeTrackUpdateEntry(obj, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            hashTypeTrackUpdateEntry(privdata, obj, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;
     }
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor) {
+static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid) {
+    serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, db, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -813,7 +814,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
         } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            scanLaterHash(ob, cursor);
+            scanLaterHash(ob, cursor, dbid);
         } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
