@@ -856,8 +856,8 @@ typedef struct replBufBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct serverDb {
-    kvstore *keys;    /* The keyspace for this DB */
-    kvstore *expires; /* Timeout of keys with a timeout set */
+    kvstore *keys;                        /* The keyspace for this DB */
+    kvstore *expires;                     /* Timeout of keys with a timeout set */
     kvstore *keys_with_volatile_items;    /* Keys with volatile items */
     dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
     dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
@@ -1696,8 +1696,8 @@ struct valkeyServer {
                                             * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
 
-    client *current_client;                /* The client that triggered the command execution (External or AOF). */
-    client *executing_client;              /* The client executing the current command (possibly script or module). */
+    client *current_client;   /* The client that triggered the command execution (External or AOF). */
+    client *executing_client; /* The client executing the current command (possibly script or module). */
 
 #ifdef LOG_REQ_RES
     char *req_res_logfile; /* Path of log file for logging all requests and their replies. If NULL, no logging will be

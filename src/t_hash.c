@@ -73,7 +73,6 @@ void hashTypeIgnoreTTL(robj *o, bool ignore) {
 bool hashTypeIsTtlIgnored(robj *o) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         return !hashTypeHasVolatileElements(o) || hashtableGetType(o->ptr) != &hashWithVolatileItemsHashtableType;
-
     }
     return true;
 }
@@ -111,7 +110,7 @@ void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set,entryGetExpiry , entry));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
         serverAssert(dbDeleteVolatileKey(db, o));
@@ -119,7 +118,6 @@ void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry) {
 }
 
 void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
-
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -134,7 +132,7 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
         dbDeleteVolatileKey(db, o);
-    }else {
+    } else {
         dbAddVolatileKey(db, o);
     }
     hashTypeIgnoreTTL(o, 0);
@@ -143,7 +141,7 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
 static inline void debugLogField(robj *key, void *entry) {
     sds key2 = objectGetKey(key);
     serverLog(LL_WARNING, "key %s field %s value %s expired",
-    key2, entryGetField(entry), entryGetValue(entry));
+              key2, entryGetField(entry), entryGetValue(entry));
 }
 
 int deleteHashEntry(robj *o, void *entry_to_del) {
@@ -2075,10 +2073,10 @@ int expireEntry(void *entry, void *ctx) {
 }
 
 /* Process fields for the current volatile key, advancing the iterator as needed. */
- size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned int max_entries) {
+size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned int max_entries) {
     serverAssert(o);
     vset *vset = hashTypeGetVolatileSet(o);
-    vsetExpiryContext ctx = { .db = db, .key = o };
+    vsetExpiryContext ctx = {.db = db, .key = o};
 
     size_t expired = vsetPopExpired(vset, entryGetExpiry, expireEntry, now, max_entries, &ctx);
 

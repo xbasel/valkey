@@ -181,7 +181,6 @@ static inline int activeExpireFieldsCheckTimeLimitReached(
     uint64_t *now_us) {
     if (((*iterations)++ & 0xf) == 0) {
         *now_us = ustime();
-
     }
     return (*now_us - start_us >= limit_us);
 }
@@ -189,7 +188,7 @@ static inline int activeExpireFieldsCheckTimeLimitReached(
 
 void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
-    if (it->current_db>=server.dbnum) {
+    if (it->current_db >= server.dbnum) {
         it->current_db = 0;
         it->db_cursor = 0;
     }
@@ -234,7 +233,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
     int dbs_performed = 0;
 
     while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
-               &iterations, start, time_limit_us, &now)) {
+                                                    &iterations, start, time_limit_us, &now)) {
         serverDb *db = server.db[it->current_db];
         if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
             advanceDb(it);
@@ -244,7 +243,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 
         size_t entries_processed = 0;
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
-                   &iterations, start, time_limit_us, &now)) {
+                                                           &iterations, start, time_limit_us, &now)) {
             if (!it->current_key) {
                 it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
                                             isExpiryTableValidForSamplingCb, it);
@@ -253,7 +252,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             }
 
             if (it->current_key) {
-                size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t) (now / 1000),
+                size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t)(now / 1000),
                                                              entries_per_call);
                 entries_processed += expired;
                 bool hasMore = hashTypeHasVolatileElements(it->current_key);
@@ -282,7 +281,7 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
      * is 10. */
 
     unsigned long config_cycle_fast_duration =
-                      ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * effort();
+        ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * effort();
     unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - effort();
 
     /* This function has some global state in order to continue the work
@@ -520,21 +519,20 @@ typedef void expiryDriver(int type, unsigned long entries_per_loop, long long ti
  * as it is not scheduled to run in the fast cycle.
  */
 void activeExpireCycle(int type) {
-
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
     unsigned long config_keys_per_loop =
-            ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort();
+        ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort();
     unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * effort();
 
 
     static int expireCycleStartWithFields = 0;
 
     /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
-    * time per iteration. Since this function gets called with a frequency of
-    * server.hz times per second, the following is the max amount of
-    * microseconds we can spend in this function. */
+     * time per iteration. Since this function gets called with a frequency of
+     * server.hz times per second, the following is the max amount of
+     * microseconds we can spend in this function. */
     long long timelimit = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
 
     if (timelimit <= 0) timelimit = 1;
@@ -558,7 +556,6 @@ void activeExpireCycle(int type) {
     }
 
     expireCycleStartWithFields = !expireCycleStartWithFields;
-
 }
 
 /*-----------------------------------------------------------------------------
