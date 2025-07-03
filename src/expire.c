@@ -604,7 +604,8 @@ int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, in
         return C_ERR;
     }
     when += basetime;
-    if (unixtime) *unixtime = when;
+    debugServerAssert(unixtime);
+    *unixtime = when;
     return C_OK;
 }
 
