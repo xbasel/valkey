@@ -352,6 +352,23 @@ pVector *pvPop(pVector *pv, void **pelem) {
     return pvRemoveAt(pv, last_idx);
 }
 
+/* Set the element at given index inside the pVector.
+ *
+ * Parameters:
+ *   pv    - The vector containing the elements to swap.
+ *   idx   - Index of the element.
+ *   elem  - pointer to the new element.
+ *
+ * Returns:
+ *   None.
+ *
+ * Preconditions:
+ *   - idx must be valid indices within the vector. */
+void pvSet(pVector *pv, uint32_t idx, void *elem) {
+    assert(idx < PV_LEN(pv));
+    pv->data[idx] = elem;
+}
+
 /* Swaps two elements at given indices inside the pVector.
  *
  * Parameters:
@@ -1226,8 +1243,9 @@ static inline size_t vsetBucketPopExpired_RAX(vsetBucket **bucket, vsetGetExpiry
     if (raxSize(buckets) == 0) {
         raxFree(buckets);
         *bucket = vsetBucketFromNone();
+    } else {
+        shrinkRaxBucketIfPossible(bucket, getExpiry);
     }
-    shrinkRaxBucketIfPossible(bucket, getExpiry);
     return count;
 }
 
@@ -1537,6 +1555,99 @@ bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry) {
     return vsetRemoveEntryWithExpiry(set, getExpiry, entry, getExpiry(entry));
 }
 
+vsetBucket *vsetBucketUpdateEntry_NONE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    UNUSED(bucket);
+    UNUSED(getExpiry);
+    UNUSED(old_entry);
+    UNUSED(new_entry);
+    UNUSED(old_expiry);
+    UNUSED(new_expiry);
+
+    return vsetBucketFromNone();
+}
+
+vsetBucket *vsetBucketUpdateEntry_SINGLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    UNUSED(getExpiry);
+    UNUSED(old_expiry);
+    UNUSED(new_expiry);
+
+    if (vsetBucketSingle(bucket) == old_entry) {
+        return vsetBucketFromSingle(new_entry);
+    }
+    return vsetBucketFromNone();
+}
+
+vsetBucket *vsetBucketUpdateEntry_VECTOR(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    UNUSED(getExpiry);
+    UNUSED(old_expiry);
+    UNUSED(new_expiry);
+
+    pVector *pv = vsetBucketVector(bucket);
+    uint32_t idx = pvFind(pv, old_entry);
+    /* in case we did not locate the entry, just return NONE bucket */
+    if (idx == pvLen(pv))
+        return vsetBucketFromNone();
+    pvSet(pv, idx, new_entry);
+    return bucket;
+}
+
+vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    UNUSED(getExpiry);
+    UNUSED(old_expiry);
+    UNUSED(new_expiry);
+
+    hashtable *ht = vsetBucketHashtable(bucket);
+    void **ref = hashtableFindRef(ht, old_entry);
+    if (!ref) {
+        return vsetBucketFromNone();
+    } else {
+        *ref = new_entry;
+    }
+    return bucket;
+}
+
+vsetBucket *vsetBucketUpdateEntry_RAX(vsetBucket *target, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
+    size_t key_len;
+    long long bucket_ts;
+    rax *expiry_buckets = vsetBucketRax(target);
+    raxNode *node;
+    /* In case new and old are to be updated in the same bucket - just update the bucket. */
+    bool update_bucket = (get_bucket_ts(old_expiry) == get_bucket_ts(new_expiry));
+    vsetBucket *bucket = findBucket(expiry_buckets, old_expiry, key, &key_len, &bucket_ts, &node);
+
+    if (!update_bucket) {
+        /* if the old and new entries are in different buckets, remove the old entry and add the new one. */
+        if (removeEntryFromRaxBucket(target, getExpiry, old_entry, bucket, key, key_len, NULL, node))
+            target = insertToBucket_RAX(getExpiry, target, new_entry, new_expiry);
+        else
+            return vsetBucketFromNone();
+    } else {
+        /* Just update the current bucket */
+        switch (vsetBucketType(bucket)) {
+        case VSET_BUCKET_NONE:
+            /* No bucket means there is no such old entry. return NONE */
+            return vsetBucketFromNone();
+        case VSET_BUCKET_SINGLE:
+            bucket = vsetBucketUpdateEntry_SINGLE(bucket, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
+        case VSET_BUCKET_VECTOR:
+            bucket = vsetBucketUpdateEntry_VECTOR(bucket, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
+        case VSET_BUCKET_HT:
+            bucket = vsetBucketUpdateEntry_HASHTABLE(bucket, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
+        default:
+            panic("Unknown bucket type to update entry");
+        }
+        if (bucket)
+            raxSetData(node, bucket);
+        else
+            return vsetBucketFromNone();
+    }
+    return target;
+}
+
 /**
  * Updates an existing entry in the volatile set (vset), optionally replacing it
  * with a new entry and expiration time.
@@ -1583,16 +1694,38 @@ bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, vo
     /* Nothing to do */
     if (old_entry == new_entry && old_expiry == new_expiry)
         return true;
-
-    if (old_entry && old_expiry != -1)
+    vsetBucket *updated = vsetBucketFromNone();
+    /* case 1 - both entries were tracked. update the bucket */
+    if (old_entry && old_expiry != -1 && new_entry && new_expiry != -1) {
+        switch (vsetBucketType(*set)) {
+        case VSET_BUCKET_NONE:
+            return false;
+        case VSET_BUCKET_SINGLE:
+            updated = vsetBucketUpdateEntry_SINGLE(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
+        case VSET_BUCKET_VECTOR:
+            updated = vsetBucketUpdateEntry_VECTOR(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
+        case VSET_BUCKET_RAX:
+            updated = vsetBucketUpdateEntry_RAX(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+        }
+        if (!updated)
+            return false;
+        *set = updated;
+        return true;
+    }
+    /* case 2 - old entry was not tracked. just add the new entry */
+    else if ((!old_entry || old_expiry == -1) && new_entry && new_expiry != -1)
+        return vsetAddEntry(set, getExpiry, new_entry);
+    /* case 3 - old entry was tracked. new entry is not. just remove the old entry */
+    else if ((!new_entry || new_expiry == -1) && old_entry && old_expiry != -1)
         /* We cannot take the expiration time from the removed entry, since it might not be allocated anymore.
          * For this reason we ask the API user to provide us the removed entry expiration time. */
-        assert((vsetRemoveEntryWithExpiry(set, getExpiry, old_entry, old_expiry)));
+        return vsetRemoveEntryWithExpiry(set, getExpiry, old_entry, old_expiry);
+    else
+        return false;
 
-    if (new_entry && new_expiry != -1)
-        assert(vsetAddEntry(set, getExpiry, new_entry));
-
-    return true;
+    return false;
 }
 
 /* vsetPopExpired - Remove expired entries from a volatile set up to a maximum count.
