@@ -2098,7 +2098,7 @@ start_server {tags {"hashexpire external:skip"}} {
             wait_for_condition 100 100 {
                 [r EXISTS myhash] eq 0
             } else {
-                fail "myhash still exsist"
+                fail "myhash still exist"
             }
 
             assert_equal "" [r HGET myhash f1]
