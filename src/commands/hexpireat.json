@@ -8,7 +8,6 @@
         "function": "hexpireAtCommand",
         "command_flags": [
             "WRITE",
-            "DENYOOM",
             "FAST"
         ],
         "acl_categories": [
