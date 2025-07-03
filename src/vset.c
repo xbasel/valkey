@@ -1555,18 +1555,7 @@ bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry) {
     return vsetRemoveEntryWithExpiry(set, getExpiry, entry, getExpiry(entry));
 }
 
-vsetBucket *vsetBucketUpdateEntry_NONE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
-    UNUSED(bucket);
-    UNUSED(getExpiry);
-    UNUSED(old_entry);
-    UNUSED(new_entry);
-    UNUSED(old_expiry);
-    UNUSED(new_expiry);
-
-    return vsetBucketFromNone();
-}
-
-vsetBucket *vsetBucketUpdateEntry_SINGLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static inline vsetBucket *vsetBucketUpdateEntry_SINGLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     UNUSED(getExpiry);
     UNUSED(old_expiry);
     UNUSED(new_expiry);
@@ -1577,7 +1566,7 @@ vsetBucket *vsetBucketUpdateEntry_SINGLE(vsetBucket *bucket, vsetGetExpiryFunc g
     return vsetBucketFromNone();
 }
 
-vsetBucket *vsetBucketUpdateEntry_VECTOR(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static inline vsetBucket *vsetBucketUpdateEntry_VECTOR(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     UNUSED(getExpiry);
     UNUSED(old_expiry);
     UNUSED(new_expiry);
@@ -1591,7 +1580,7 @@ vsetBucket *vsetBucketUpdateEntry_VECTOR(vsetBucket *bucket, vsetGetExpiryFunc g
     return bucket;
 }
 
-vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     UNUSED(getExpiry);
     UNUSED(old_expiry);
     UNUSED(new_expiry);
@@ -1606,7 +1595,7 @@ vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vsetGetExpiryFun
     return bucket;
 }
 
-vsetBucket *vsetBucketUpdateEntry_RAX(vsetBucket *target, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static inline vsetBucket *vsetBucketUpdateEntry_RAX(vsetBucket *target, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
     size_t key_len;
     long long bucket_ts;
@@ -1704,8 +1693,12 @@ bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, vo
             updated = vsetBucketUpdateEntry_SINGLE(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
             break;
         case VSET_BUCKET_VECTOR:
-            updated = vsetBucketUpdateEntry_VECTOR(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
-            break;
+            /* NOTE! - in this specific case we might have changed the vector order - need to sort it again (NLogN) */
+            /* or remove it from the vector and re-add it. (N+LogN). the later also looks cleaner... */
+            if (!vsetRemoveEntryWithExpiry(set, getExpiry, old_entry, old_expiry))
+                return false;
+            return vsetAddEntry(set, getExpiry, new_entry);
+
         case VSET_BUCKET_RAX:
             updated = vsetBucketUpdateEntry_RAX(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
         }
