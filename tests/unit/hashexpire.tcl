@@ -1823,7 +1823,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 [$primary HTTL myhash FIELDS 1 f1] eq -2 && \
                 [$replica_1 HTTL myhash FIELDS 1 f1] eq -2
             } else {
-                fail "f1 still exsists"
+                fail "f1 still exists"
             }
             
             # Verify keyspace notification
@@ -1890,7 +1890,7 @@ start_server {tags {"hashexpire external:skip"}} {
                     [$replica_1 HTTL myhash FIELDS 1 f1] eq -2 && \
                     [$replica_2 HTTL myhash FIELDS 1 f1] eq -2
                 } else {
-                    fail "f1 still exsists"
+                    fail "f1 still exists"
                 }
                 
                 # primary gets hexpired and replicas get hdel
