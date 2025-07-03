@@ -1,6 +1,6 @@
 {
     "HGETEX": {
-        "summary": "Set the value of one or more fields of a given hash key, and optionally set their expiration time.",
+        "summary": "Get the value of one or more fields of a given hash key, and optionally set their expiration time or time-to-live (TTL).",
         "complexity": "O(1)",
         "group": "hash",
         "since": "9.0.0",
