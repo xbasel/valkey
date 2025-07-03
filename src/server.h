@@ -3350,6 +3350,7 @@ void hashTypeFreeVolatileSet(robj *o);
 void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+vset *hashTypeGetVolatileSet(robj *o);
 size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned int max_entries);
 
 void hashTypeConvert(robj *o, int enc);
@@ -3375,7 +3376,6 @@ robj *hashTypeDup(serverDb *targetdb, robj *o);
 bool hashTypeHasVolatileElements(robj *o);
 size_t hashTypeNumVolatileElements(robj *o);
 void hashTypeIgnoreTTL(robj *o, bool ignore);
-bool hashTypeIsTtlIgnored(robj *o);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
@@ -3550,8 +3550,8 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
-int dbDeleteVolatileKey(serverDb *db, robj *key);
-int dbAddVolatileKey(serverDb *db, robj *key);
+int dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
+int dbTrackKeyWithVolaItems(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

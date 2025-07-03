@@ -206,8 +206,6 @@ void hashKeyDone(activeExpireFieldIterator *it) {
     it->current_key = NULL;
 }
 
-vset *hashTypeGetVolatileSet(robj *o);
-
 /*
  * activeExpireCycleFields
  *
@@ -252,8 +250,10 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             }
 
             if (it->current_key) {
+                hashTypeIgnoreTTL(it->current_key, 1);
                 size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t)(now / 1000),
                                                              entries_per_call);
+                if (!it->current_key) hashTypeIgnoreTTL(it->current_key, 0);
                 entries_processed += expired;
                 bool hasMore = hashTypeHasVolatileElements(it->current_key);
                 if (!hasMore || expired < entries_per_call) {

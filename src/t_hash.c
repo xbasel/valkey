@@ -68,15 +68,6 @@ void hashTypeIgnoreTTL(robj *o, bool ignore) {
     }
 }
 
-/* make any access to the hash object elements ignore the specific elements expiration.
- * This is mainly in order to be able to access hash elements which are already expired. */
-bool hashTypeIsTtlIgnored(robj *o) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        return !hashTypeHasVolatileElements(o) || hashtableGetType(o->ptr) != &hashWithVolatileItemsHashtableType;
-    }
-    return true;
-}
-
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     vset *vset = hashtableMetadata(o->ptr);
@@ -101,7 +92,7 @@ void hashTypeTrackEntry(serverDb *db, robj *o, void *entry) {
         set = hashTypeGetVolatileSet(o);
     } else {
         set = hashTypeGetOrcreateVolatileSet(o);
-        serverAssert(dbAddVolatileKey(db, o));
+        serverAssert(dbTrackKeyWithVolaItems(db, o));
     }
     serverAssert(vsetAddEntry(set, entryGetExpiry, entry));
 }
@@ -113,7 +104,7 @@ void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry) {
     serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
-        serverAssert(dbDeleteVolatileKey(db, o));
+        serverAssert(dbUntrackKeyWithVolaItems(db, o));
     }
 }
 
@@ -131,9 +122,9 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
 
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
-        dbDeleteVolatileKey(db, o);
+        dbUntrackKeyWithVolaItems(db, o);
     } else {
-        dbAddVolatileKey(db, o);
+        dbTrackKeyWithVolaItems(db, o);
     }
     hashTypeIgnoreTTL(o, 0);
 }
@@ -159,11 +150,8 @@ int deleteHashEntry(robj *o, void *entry_to_del) {
 
 int hashTypeExpireEntry(void *db, void *o, void *entry) {
     UNUSED(db);
-    bool ttlIgnored = hashTypeIsTtlIgnored(o);
-    hashTypeIgnoreTTL(o, 1);
     debugLogField(o, entry); // TODO xbasel remove
     int retcode = deleteHashEntry(o, entry);
-    hashTypeIgnoreTTL(o, ttlIgnored);
     return retcode;
 }
 
@@ -2081,6 +2069,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     size_t expired = vsetPopExpired(vset, entryGetExpiry, expireEntry, now, max_entries, &ctx);
 
     if (hashTypeLength(o) == 0) {
+        dbUntrackKeyWithVolaItems(db, o);
         sds key = objectGetKey(o);
         robj *keyobj = createStringObject(key, sdslen(key));
         dbDelete(db, keyobj);

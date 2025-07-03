@@ -483,11 +483,11 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
-        /* If deleting a hash object, remove TODO*/
-        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
-            kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr);
+        /* If deleting a hash object, untrack the object if it contains volatile items. */
+        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val)) {
+            dbUntrackKeyWithVolaItems(db, val); // TODO xbasel, dbUntrackKeyWithVolaItems should accept optional dict_index (it's available here).
         } else {
-            debugServerAssert(0 == kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, key->ptr));
+            debugServerAssert(0 == dbUntrackKeyWithVolaItems(db, val));
         }
 
 
@@ -509,16 +509,16 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
-/* Add a volatile key for a hashtable with volatile fields */
-int dbAddVolatileKey(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, key);
+/* Add a key with volatile items to the tracking kvstore.  */
+int dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
+    int dict_index = getKVStoreIndexForKey(o->ptr);
+    return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
-/* Delete a volatile key for a hash key which no longer has field with ttl attached */
-int dbDeleteVolatileKey(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(key));
+/* Delete a key from the keys with volatile entries tracking kvstore  */
+int dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
+    int dict_index = getKVStoreIndexForKey(o->ptr);
+    return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */

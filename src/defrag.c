@@ -146,6 +146,12 @@ typedef struct {
 } defragPubSubCtx;
 static_assert(offsetof(defragPubSubCtx, kvstate) == 0, "defragStageKvstoreHelper requires this");
 
+/* Context for defragmenting hash objects: holds the DB and the hash key object. */
+typedef struct {
+    serverDb *db;
+    robj *o;
+} objectDbContext;
+
 
 /* When scanning a main kvstore, large elements are queued for later handling rather than
  * causing a large latency spike while processing a hash table bucket.  This list is only used
@@ -452,9 +458,10 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
     if (new_entry) {
         /* In case the entry is tracked we need to update it in the volatile set */
         if (entryHasExpiry(new_entry)) {
-            robj *obj = (robj *)privdata;
-            serverAssert(obj);
-            hashTypeTrackUpdateEntry(privdata, obj, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            objectDbContext *ctx = privdata;
+            serverAssert(ctx->o);
+            serverAssert(ctx->db);
+            hashTypeTrackUpdateEntry(ctx->db, ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;
     }
@@ -501,7 +508,7 @@ static void defragZsetSkiplist(robj *ob) {
     }
 }
 
-static void defragHash(robj *ob) {
+static void defragHash(serverDb *db, robj *ob) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
@@ -509,7 +516,8 @@ static void defragHash(robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            objectDbContext ctx = {db, ob};
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
         } while (cursor != 0);
     }
     /* defrag the hashtable struct and tables */
@@ -745,7 +753,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
             if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            defragHash(ob);
+            defragHash(db, ob);
         } else {
             serverPanic("Unknown hash encoding");
         }
