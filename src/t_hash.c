@@ -1539,9 +1539,9 @@ static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int c
  *
  * - Responds with an array of integers:
  *   - 1 if the expiration was set.
- *   - 0 if it was unchanged.
- *   - -1 if the field does not exist.
- *   - 2 if the field was immediately expired and deleted.
+ *   - 0 if it was unchanged (due to provided condition check failing).
+ *   - -2 if the field does not exist or the hash is empty.
+ *   - 2 if the field was immediately expired and deleted due to provided expiration is 0 or in the past.
  *
  * - If fields were deleted due to expiration:
  *   - Rewrites the command as HDEL for replication/AOF.
@@ -1680,23 +1680,15 @@ void hpexpireAtCommand(client *c) {
  * - Expects a key and a list of hash fields whose expiration metadata should be removed.
  * - Validates that the number of provided fields matches the declared count.
  *
- * - For each specified field:
- *   - Attempts to remove any existing expiration.
- *   - Replies with:
- *     - 1 if the expiration was successfully removed.
- *     - 0 if the field had no expiration or did not exist.
- *
- * - Replies with an array of integers, one per field, indicating the outcome of each attempt.
+ * - For each specified field attempts to remove any existing expiration.
+ * - Replies to the client  with an array of integers, each representing the result of persistence for one field:
+ *   - 1 if the expiration was set.
+ *   - -1 if the field exists, but has no expiraiton time set.
+ *   - -2 if the field does not exist or the hash is empty.
  *
  * - If any expirations were removed:
  *   - Marks the key as modified (for replication/AOF consistency).
  *   - Emits a "hpersist" keyspace notification.
- *
- *
- * Return Value:
- * - An array of integers, each representing the result of persistence for one field.
- *   - 1 = field existed and expiration was removed.
- *   - 0 = field did not exist or had no expiration.
  *
  * Keyspace Notifications (if enabled):
  * - "hpersist" — emitted once if any field had its expiration removed. */
@@ -1716,6 +1708,8 @@ void hpersistCommand(client *c) {
     addReplyArrayLen(c, num_fields);
 
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, hash, OBJ_HASH))
+        return;
 
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);

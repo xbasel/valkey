@@ -1936,7 +1936,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
                 assert_equal -1 [$instance HTTL myhash FIELDS 1 f3]
                 assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [$instance info keyspace]] keys=%d]
-                assert_equal "v1 v2 v3" [$instance HGETEX myhash FIELDS 3 f1 f2 f3]
+                assert_equal "v1 v2 v3" [$instance HMGET myhash f1 f2 f3]
                 assert_equal 3 [$instance HLEN myhash]
             }
 

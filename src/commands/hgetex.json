@@ -7,7 +7,7 @@
         "arity": -5,
         "function": "hgetexCommand",
         "command_flags": [
-            "READONLY",
+            "WRITE",
             "FAST"
         ],
         "acl_categories": [
@@ -16,7 +16,7 @@
         "key_specs": [
             {
                 "flags": [
-                    "RO",
+                    "RW",
                     "ACCESS"
                 ],
                 "begin_search": {

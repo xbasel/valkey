@@ -38,8 +38,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "entry.h"
 #include "server.h"
+#include "entry.h"
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"
