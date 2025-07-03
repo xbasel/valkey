@@ -1781,6 +1781,217 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 }
 
+start_server {tags {"hashexpire external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {tags {needs:repl external:skip}} {
+        set replica_1 [srv 0 client]
+        set replica_1_host [srv 0 host]
+        set replica_1_port [srv 0 port]
+
+        test {Replication Primary -> R1} {
+            $primary FLUSHALL
+            ####### Replication setup #######
+            $replica_1 replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica_1 role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica_1 info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Initialize deferred clients and subscribe to keyspace notifications
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica_1 [valkey_deferring_client $replica_1_host $replica_1_port]
+            assert_equal {1} [psubscribe $rd_primary __keyevent@*]
+            assert_equal {1} [psubscribe $rd_replica_1 __keyevent@*]
+
+            # Create hash and timing - f1 < f2 < f3 expiry times
+            set f1_exp [expr {[clock seconds] + 10000}]
+
+            # Setup hash, set expire and set expire 0
+            $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+            $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
+            wait_for_ofs_sync $primary $replica_1
+            
+            $primary HEXPIRE myhash 0 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 1 hdel (for replica)
+            wait_for_ofs_sync $primary $replica_1
+
+            # Wait for f1 expiration
+            wait_for_condition 50 100 {
+                [$primary HTTL myhash FIELDS 1 f1] eq -2 && \
+                [$replica_1 HTTL myhash FIELDS 1 f1] eq -2
+            } else {
+                fail "f1 still exsists"
+            }
+            
+            # Verify keyspace notification
+            foreach rd  [list $rd_primary $rd_replica_1] {
+                assert_keyevent_pattern $rd hset myhash
+                assert_keyevent_pattern $rd hexpire myhash
+            }
+            # primary gets hexpired and replica gets hdel
+            assert_keyevent_pattern $rd_primary hexpired myhash
+            assert_keyevent_pattern $rd_replica_1 hdel myhash
+
+            $rd_primary close
+            $rd_replica_1 close
+        }
+
+        start_server {tags {needs:repl external:skip}} {
+            $primary FLUSHALL
+            set replica_2 [srv 0 client]
+            set replica_2_host [srv 0 host]
+            set replica_2_port [srv 0 port]
+            
+            test {Chain Replication (Primary -> R1 -> R2) preserves TTL} {
+                $replica_1 replicaof $primary_host $primary_port
+                # Wait for R2 to connect to R1
+                wait_for_condition 100 100 {
+                    [info_field [$replica_1 info replication] master_link_status] eq "up"
+                } else {
+                    fail "R1 <-> PRIMARY didn't establish connection"
+                }
+
+                $replica_2 replicaof $replica_1_host $replica_1_port
+                # Wait for R2 to connect to R1
+                wait_for_condition 100 100 {
+                    [info_field [$replica_1 info replication] master_link_status] eq "up"
+                } else {
+                    fail "R2 <-> R1 didn't establish connection"
+                }
+
+                # Initialize deferred clients and subscribe to keyspace notifications
+                set rd_primary [valkey_deferring_client -2]
+                set rd_replica_1 [valkey_deferring_client -1]
+                set rd_replica_2 [valkey_deferring_client $replica_2_host $replica_2_port]
+                assert_equal {1} [psubscribe $rd_primary __keyevent@*]
+                assert_equal {1} [psubscribe $rd_replica_1 __keyevent@*]
+                assert_equal {1} [psubscribe $rd_replica_2 __keyevent@*]
+    
+                # Create hash and timing - f1 < f2 < f3 expiry times
+                set f1_exp [expr {[clock seconds] + 10000}]
+
+                ############################################# STEUP HASH #############################################
+                $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+                $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
+                
+                $primary HPEXPIRE myhash 0 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 2 hdel (for replicas)
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
+
+
+                # Wait for f1 expiration
+                wait_for_condition 50 100 {
+                    [$primary HTTL myhash FIELDS 1 f1] eq -2 && \
+                    [$replica_1 HTTL myhash FIELDS 1 f1] eq -2 && \
+                    [$replica_2 HTTL myhash FIELDS 1 f1] eq -2
+                } else {
+                    fail "f1 still exsists"
+                }
+                
+                # primary gets hexpired and replicas get hdel
+                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
+                    assert_keyevent_pattern $rd hset myhash
+                    assert_keyevent_pattern $rd hexpire myhash
+                }
+                assert_keyevent_pattern $rd_primary hexpired myhash
+                assert_keyevent_pattern $rd_replica_1 hdel myhash
+                assert_keyevent_pattern $rd_replica_2 hdel myhash
+
+                $rd_primary close
+                $rd_replica_1 close
+                $rd_replica_2 close
+            }
+        }
+
+        test {Replica Failover/Promotion to Primary} {
+            $primary FLUSHALL
+            ####### Replication setup #######
+            $replica_1 replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica_1 role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica_1 info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+            
+            # Create hash fields with TTL on primary
+            set f1_exp [expr {[clock seconds] + 200}]
+            set f2_exp [expr {[clock seconds] + 300000}]
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1
+            $primary HEXPIREAT myhash $f2_exp FIELDS 1 f2
+            # f3 remains persistent
+
+            # Wait for full sync
+            wait_for_ofs_sync $primary $replica_1
+
+            # Verify primary and replica are the same
+            foreach instance [list $primary $replica_1] {
+                assert_equal $f1_exp [$instance HEXPIRETIME myhash FIELDS 1 f1]
+                assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
+                assert_equal -1 [$instance HTTL myhash FIELDS 1 f3]
+                assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [$instance info keyspace]] keys=%d]
+                assert_equal "v1 v2 v3" [$instance HGETEX myhash FIELDS 3 f1 f2 f3]
+                assert_equal 3 [$instance HLEN myhash]
+            }
+
+            # Perform failover
+            $replica_1 replicaof no one
+            # Wait for replica to become primary
+            wait_for_condition 100 100 {
+                [info_field [$replica_1 info replication] role] eq "master"
+            } else {
+                fail "Replica didn't become master"
+            }
+
+            # Setup keyspace notifications for the promoted replica
+            $replica_1 config set notify-keyspace-events KEA
+            set rd_replica [valkey_deferring_client $replica_1_host $replica_1_port]
+            assert_equal {1} [psubscribe $rd_replica __keyevent@*]
+
+            # Check all values that checked before are the same
+            assert_equal 3 [$replica_1 HLEN myhash]
+            assert_equal $f1_exp [$replica_1 HEXPIRETIME myhash FIELDS 1 f1]
+            assert_equal $f2_exp [$replica_1 HEXPIRETIME myhash FIELDS 1 f2]
+            assert_equal -1 [$replica_1 HTTL myhash FIELDS 1 f3]
+            assert_equal "v1 v2 v3" [$replica_1 HGETEX myhash FIELDS 3 f1 f2 f3]
+            assert_equal 3 [$replica_1 HLEN myhash]
+            
+            # Set f1 to expire in 1 second and wait for expiration
+            $replica_1 HEXPIRE myhash 1 FIELDS 1 f1 ;# will trigger hexpire
+            wait_for_condition 50 100 {
+                [$replica_1 HTTL myhash FIELDS 1 f1] eq -2
+            } else {
+                fail "f1 not expired"
+            }
+
+            # Verify expiry
+            assert_equal "" [$replica_1 HGET myhash f1]
+            assert_equal 3 [$replica_1 HLEN myhash]
+            # Change TTL of f2
+            $replica_1 HEXPIRE myhash 1000000 FIELDS 1 f2 ;# will trigger hexpire
+            assert_morethan [$replica_1 HTTL myhash FIELDS 1 f2] 9000
+            # Change TTL of f2 to 0 (immediate expiry)
+            $replica_1 HGETEX myhash EX 0 FIELDS 1 f2 ;# will trigger hexpired
+            # Verify final state
+            assert_equal 2 [$replica_1 HLEN myhash]
+            assert_equal "{} {} v3" [$replica_1 HGETEX myhash FIELDS 3 f1 f2 f3]
+
+            assert_keyevent_pattern $rd_replica hexpire myhash
+            assert_keyevent_pattern $rd_replica hexpire myhash
+            assert_keyevent_pattern $rd_replica hexpired myhash
+
+            $rd_replica close
+        }
+        
+    }
+}
+
 ### Slot Migration ####
 start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}} {
     # Flush all data on all cluster nodes before starting
