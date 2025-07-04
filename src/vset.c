@@ -1693,11 +1693,16 @@ bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, vo
             updated = vsetBucketUpdateEntry_SINGLE(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
             break;
         case VSET_BUCKET_VECTOR:
-            /* NOTE! - in this specific case we might have changed the vector order - need to sort it again (NLogN) */
-            /* or remove it from the vector and re-add it. (N+LogN). the later also looks cleaner... */
-            if (!vsetRemoveEntryWithExpiry(set, getExpiry, old_entry, old_expiry))
-                return false;
-            return vsetAddEntry(set, getExpiry, new_entry);
+            if (old_expiry != new_expiry) {
+                /* NOTE! - in this specific case we might have changed the vector order - need to sort it again (NLogN) */
+                /* or remove it from the vector and re-add it (N+LogN). the later also looks cleaner... */
+                if (!vsetRemoveEntryWithExpiry(set, getExpiry, old_entry, old_expiry))
+                    return false;
+                return vsetAddEntry(set, getExpiry, new_entry);
+            }
+            /* We are just updating the entry ref, so sorting is not impacted */
+            updated = vsetBucketUpdateEntry_VECTOR(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
+            break;
 
         case VSET_BUCKET_RAX:
             updated = vsetBucketUpdateEntry_RAX(*set, getExpiry, old_entry, new_entry, old_expiry, new_expiry);
