@@ -1783,7 +1783,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         size_t used_before = ht->used[0];
         bucket *b = &ht->tables[0][idx];
         do {
-            if (b->presence != 0) {
+            if (fn && b->presence != 0) {
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                     if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
@@ -1826,7 +1826,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             size_t used_before = ht->used[table_small];
             bucket *b = &ht->tables[table_small][idx];
             do {
-                if (b->presence) {
+                if (fn && b->presence) {
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                         if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
@@ -1856,7 +1856,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 size_t used_before = ht->used[table_large];
                 bucket *b = &ht->tables[table_large][idx];
                 do {
-                    if (b->presence) {
+                    if (fn && b->presence) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                             if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];

@@ -655,43 +655,41 @@ static inline uint32_t findInsertPosition(vsetGetExpiryFunc getExpiry, vsetBucke
  */
 static uint32_t findSplitPosition(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, long long *split_ts_out) {
     pVector *pv = vsetBucketVector(bucket);
-
     if (!pv || pv->len < 2) return pv ? pv->len : 0;
 
-    uint32_t left = 1;
-    uint32_t right = pv->len - 1;
-    uint32_t best_split = pv->len;
-    uint32_t mid_closest_to_center = pv->len / 2;
-    long long best_split_ts = 0;
+    int mid = pv->len / 2;
+    int offset = 0;
 
-    while (left <= right) {
-        uint32_t mid = (left + right) / 2;
+    while (1) {
+        int left = mid - offset;
+        int right = mid + offset;
 
-        long long prev_ts = get_bucket_ts(getExpiry(pvGet(pv, mid - 1)));
-        long long curr_ts = get_bucket_ts(getExpiry(pvGet(pv, mid)));
-
-        if (prev_ts != curr_ts) {
-            // Check if closer to center
-            if (best_split == pv->len ||
-                abs((int)mid - (int)mid_closest_to_center) < abs((int)best_split - (int)mid_closest_to_center)) {
-                best_split = mid;
-                best_split_ts = prev_ts;
+        // Check left side (as long as i > 0 to allow e[i-1])
+        if (left > 0) {
+            long long ts1 = get_bucket_ts(getExpiry(pvGet(pv, left - 1)));
+            long long ts2 = get_bucket_ts(getExpiry(pvGet(pv, left)));
+            if (ts1 < ts2) {
+                if (split_ts_out) *split_ts_out = ts1;
+                return left;
             }
-            right = mid - 1;
-        } else {
-            left = mid + 1;
         }
+
+        // Check right side (as long as i > 0 to allow e[i-1])
+        if (right > 0 && right < pv->len) {
+            long long ts1 = get_bucket_ts(getExpiry(pvGet(pv, right - 1)));
+            long long ts2 = get_bucket_ts(getExpiry(pvGet(pv, right)));
+            if (ts1 < ts2) {
+                if (split_ts_out) *split_ts_out = ts1;
+                return right;
+            }
+        }
+
+        offset++;
+        if (mid - offset < 1 && mid + offset >= pv->len) break; // searched entire vector
     }
 
-    if (split_ts_out) {
-        *split_ts_out = best_split != pv->len
-                            ? best_split_ts
-                            : get_bucket_ts(getExpiry(pvGet(pv, pv->len - 1)));
-    }
-
-    return best_split;
+    return pv->len; // no split found
 }
-
 
 #define VSET_BUCKET_KEY_LEN 8
 
@@ -1966,4 +1964,118 @@ void vsetClear(vset *set) {
  *   - false otherwise. */
 bool vsetIsEmpty(vset *set) {
     return vsetBucketType(*set) == VSET_BUCKET_NONE;
+}
+
+/**************** Defrag Logic *********************/
+static struct vsetDefragState {
+    long long bucket_ts;
+    size_t bucket_cursor;
+} defragState;
+
+static size_t vsetBucketDefrag_VECTOR(vsetBucket **bucket, size_t cursor, void *(*defragfn)(void *)) {
+    UNUSED(cursor);
+    pVector *pv = vsetBucketVector(*bucket);
+    pv = defragfn(pv);
+    *bucket = vsetBucketFromVector(pv);
+    return 0;
+}
+
+static size_t vsetBucketDefrag_HASHTABLE(vsetBucket **bucket, size_t cursor, void *(*defragfn)(void *)) {
+    hashtable *ht = vsetBucketHashtable(*bucket);
+    if (cursor == 0) {
+        ht = hashtableDefragTables(ht, defragfn);
+        *bucket = vsetBucketFromHashtable(ht);
+    }
+    return hashtableScanDefrag(ht, cursor, NULL, NULL, defragfn, 0);
+}
+
+static size_t vsetBucketDefrag_RAX(vsetBucket **bucket, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNode)(raxNode **)) {
+    struct vsetDefragState *state = (struct vsetDefragState *)cursor;
+    size_t bucket_cursor = 0;
+    unsigned char key[VSET_BUCKET_KEY_LEN] = {0};
+    size_t key_len;
+    long long bucket_ts;
+    rax *r = vsetBucketRax(*bucket);
+    raxIterator ri;
+
+    /* init the state if this is the first time we enter the bucket */
+    if (!state) {
+        state = &defragState;
+        state->bucket_ts = -1;
+        state->bucket_cursor = 0;
+        if ((r = defragfn(r))) *bucket = vsetBucketFromRax(r);
+        r = vsetBucketRax(*bucket);
+    }
+    raxStart(&ri, r);
+    ri.node_cb = defragRaxNode;
+    if (state->bucket_ts < 0) {
+        /* No prev timestamp, meaning we are starting a new RAX bucket scan */
+        assert(raxSeek(&ri, "^", NULL, 0));
+        assert(raxNext(&ri)); /* there MUST be at least one bucket! */
+        bucket_ts = decodeExpiryKey(ri.key);
+    } else {
+        /* we are continuing a RAX bucket scan. lets try and locate the last scanned bucket.
+         * If not found we can search for the next one. */
+        key_len = encodeExpiryKey(state->bucket_ts, key);
+        if (state->bucket_cursor) {
+            /* We were in the middle of scanning a bucket. lets try and continue there.
+             * It is possible that this bucket was deleted. if so we will get to a new bucket
+             * which is also fine. */
+            assert(raxSeek(&ri, ">=", key, key_len));
+        } else {
+            /* in case we completed the last bucket, lets progress to a later bucket */
+            assert(raxSeek(&ri, ">", key, key_len));
+        }
+        /* in case we reached the end of the RAX, we are done. */
+        if (!raxNext(&ri)) {
+            return 0;
+        }
+        bucket_ts = decodeExpiryKey(ri.key);
+        if (state->bucket_ts != bucket_ts) {
+            /* if this is a new bucket, lets start from the beginning */
+            bucket_cursor = 0;
+        } else {
+            bucket_cursor = state->bucket_cursor;
+        }
+    }
+    raxStop(&ri);
+    vsetBucket *time_bucket = ri.data;
+    switch (vsetBucketType(time_bucket)) {
+    case VSET_BUCKET_NONE:
+    case VSET_BUCKET_SINGLE:
+        bucket_cursor = 0;
+        break;
+    case VSET_BUCKET_VECTOR:
+        bucket_cursor = vsetBucketDefrag_VECTOR(&time_bucket, bucket_cursor, defragfn);
+        if (time_bucket != ri.data)
+            raxSetData(ri.node, time_bucket);
+        break;
+    case VSET_BUCKET_HT:
+        bucket_cursor = vsetBucketDefrag_HASHTABLE(&time_bucket, bucket_cursor, defragfn);
+        if (time_bucket != ri.data)
+            raxSetData(ri.node, time_bucket);
+        break;
+    default:
+        panic("Unsupported vset bucket type for RAX bucket. Only supported types are single, vector or hashtable");
+    }
+    /* if we reached here, we are not done. lets return the state and next time we can continue from this bucket. */
+    state->bucket_ts = bucket_ts;
+    state->bucket_cursor = bucket_cursor;
+    return (size_t)state;
+}
+
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNode)(raxNode **)) {
+    switch (vsetBucketType(*set)) {
+    case VSET_BUCKET_NONE:
+    case VSET_BUCKET_SINGLE:
+        /* nothing to do */
+        return 0;
+    case VSET_BUCKET_VECTOR:
+        return vsetBucketDefrag_VECTOR(set, cursor, defragfn);
+    case VSET_BUCKET_RAX:
+        return vsetBucketDefrag_RAX(set, cursor, defragfn, defragRaxNode);
+    default:
+        panic("Unknown vset node type to defrag");
+    }
+    return 0;
 }

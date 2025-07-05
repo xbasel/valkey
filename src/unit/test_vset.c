@@ -211,6 +211,7 @@ int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
 
 #define NUM_ITERATIONS 100000
 #define MAX_ENTRIES 10000
+#define NUM_DEFRAG_STEPS 100
 
 /* Global array to simulate a test database */
 mock_entry *mock_entries[MAX_ENTRIES];
@@ -248,9 +249,21 @@ mock_entry *mock_entry_create(const char *keystr, long long expiry) {
 int insert_mock_entry(vset *set) {
     if (mock_entry_count >= MAX_ENTRIES) return 0;
     char keybuf[32];
-    snprintf(keybuf, sizeof(keybuf), "key_%d", rand());
+    snprintf(keybuf, sizeof(keybuf), "key_%d", mock_entry_count);
 
     long long expiry = rand() % 10000 + 100;
+    mock_entry *e = mock_entry_create(keybuf, expiry);
+    // printf("adding entry %p with expiry %llu\n", e, expiry);
+    TEST_ASSERT(vsetAddEntry(set, mockGetExpiry, e));
+    mock_entries[mock_entry_count++] = e;
+    return 0;
+}
+
+int insert_mock_entry_with_expiry(vset *set, long long expiry) {
+    if (mock_entry_count >= MAX_ENTRIES) return 0;
+    char keybuf[32];
+    snprintf(keybuf, sizeof(keybuf), "key_%d", mock_entry_count);
+
     mock_entry *e = mock_entry_create(keybuf, expiry);
     // printf("adding entry %p with expiry %llu\n", e, expiry);
     TEST_ASSERT(vsetAddEntry(set, mockGetExpiry, e));
@@ -291,11 +304,80 @@ int expire_mock_entries(vset *set, mstime_t now) {
     return 0;
 }
 
+void *mock_defragfn(void *ptr) {
+    size_t size = zmalloc_size(ptr);
+    void *newptr = zmalloc(size);
+    memcpy(newptr, ptr, size);
+    zfree(ptr);
+    return newptr;
+}
+
+int mock_defrag_rax_node(raxNode **noderef) {
+    raxNode *newnode = mock_defragfn(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
+}
+
+size_t defrag_vset(vset *set, size_t cursor, size_t steps) {
+    if (steps == 0) steps = ULONG_MAX;
+    do {
+        cursor = vsetScanDefrag(set, cursor, mock_defragfn, mock_defrag_rax_node);
+        steps--;
+    } while (cursor != 0 && steps > 0);
+    return cursor;
+}
+
 int free_mock_entries(void) {
     for (int i = 0; i < mock_entry_count; i++) {
         mock_entry *e = mock_entries[i];
         mockFreeEntry(e);
     }
+    mock_entry_count = 0;
+    return 0;
+}
+
+/* --------- Defrag Test --------- */
+int test_vset_defrag(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    srand(time(NULL));
+
+    vset set;
+    vsetInit(&set);
+
+    /* defrag empty set */
+    TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
+
+    /* defrag when single entry */
+    insert_mock_entry(&set);
+    TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
+
+    /* defrag when vector */
+    for (int i = 0; i < VOLATILESET_VECTOR_BUCKET_MAX_SIZE - 1; i++)
+        insert_mock_entry(&set);
+    TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
+
+    long long expiry = rand() % 10000 + 100;
+    for (int i = 0; i < VOLATILESET_VECTOR_BUCKET_MAX_SIZE * 2; i++) {
+        insert_mock_entry_with_expiry(&set, expiry);
+    }
+    TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
+
+    size_t cursor = 0;
+    for (int i = 0; i < NUM_ITERATIONS; i++) {
+        if (i % NUM_DEFRAG_STEPS == 0)
+            cursor = defrag_vset(&set, cursor, NUM_DEFRAG_STEPS);
+        insert_mock_entry_with_expiry(&set, expiry);
+    }
+    TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
+
+    vsetClear(&set);
+    free_mock_entries();
+
     return 0;
 }
 
@@ -310,7 +392,7 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
     vsetInit(&set);
 
     for (int i = 0; i < NUM_ITERATIONS; i++) {
-        int op = rand() % 4;
+        int op = rand() % 5;
         switch (op) {
         case 0:
         case 1:
@@ -321,6 +403,9 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
             break;
         case 3:
             remove_mock_entry(&set);
+            break;
+        case 4:
+            TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
             break;
         }
 
