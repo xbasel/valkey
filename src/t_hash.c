@@ -1169,7 +1169,7 @@ void hsetexCommand(client *c) {
     }
     /* Check that the parsed fields number matches the real provided number of fields */
     if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
-        addReplyErrorObject(c, shared.syntaxerr);
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
 
@@ -1338,7 +1338,7 @@ void hgetexCommand(client *c) {
 
     /* Check that the parsed fields number matches the real provided number of fields */
     if (!num_fields || num_fields != (c->argc - fields_index)) {
-        addReplyErrorObject(c, shared.syntaxerr);
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
 
@@ -1584,7 +1584,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     /* Check that the parsed fields number matches the real provided number of fields */
     if (!num_fields || num_fields != (c->argc - fields_index)) {
-        addReplyErrorObject(c, shared.syntaxerr);
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
 
@@ -1682,7 +1682,7 @@ void hpexpireAtCommand(client *c) {
  *
  * - For each specified field attempts to remove any existing expiration.
  * - Replies to the client  with an array of integers, each representing the result of persistence for one field:
- *   - 1 if the expiration was set.
+ *   - 1 if the expiration for the field was removed.
  *   - -1 if the field exists, but has no expiraiton time set.
  *   - -2 if the field does not exist or the hash is empty.
  *
@@ -1700,7 +1700,7 @@ void hpersistCommand(client *c) {
 
     /* Check that the parsed fields number matches the real provided number of fields */
     if (!num_fields || num_fields != (c->argc - fields_index)) {
-        addReplyErrorObject(c, shared.syntaxerr);
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
 
@@ -1713,8 +1713,10 @@ void hpersistCommand(client *c) {
 
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);
-        server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
-        changes += (result > 0 ? 1 : 0);
+        if (result > 0) {
+            server.dirty++;
+            changes++;
+        }
         addReplyLongLong(c, result);
     }
     if (changes) {

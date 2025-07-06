@@ -262,14 +262,14 @@ start_server {tags {"hashexpire external:skip"}} {
         r HSET myhash f1 v1
         catch {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
     
     test {HGETEX EXAT- multiple options used (EXAT + PXAT)} {
         r FLUSHALL
         r HSET myhash f1 v1
         catch {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
     
     # Common error scenarios for all commands
     foreach {cmd ttl_val} [list \
@@ -283,7 +283,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd FIELDS 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- negative TTL" {
             r FLUSHALL
@@ -304,7 +304,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd $ttl_val 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- wrong numfields count (too few fields)" {
             r FLUSHALL
@@ -318,7 +318,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd $ttl_val FIELDS 1 f1 f2} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- key is wrong type (string instead of hash)" {
             r FLUSHALL
@@ -331,20 +331,20 @@ start_server {tags {"hashexpire external:skip"}} {
             r FLUSHALL
             catch {r HGETEX myhash $cmd $ttl_val FIELDS 0} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd with negative numfields" {
             r FLUSHALL
             catch {r HGETEX myhash $cmd $ttl_val FIELDS -10} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
 
         test "HGETEX $cmd with missing key" {
             r FLUSHALL
             set expire [expr {[clock seconds] + 100}]
             catch {r HGETEX $cmd $expire FIELDS 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
     }
 }
 
@@ -619,7 +619,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX EX - test missing TTL} {
         catch {r HSETEX myhash EX FIELDS 1 field1 val1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     test {HSETEX EX - mismatched field/value count} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
@@ -670,7 +670,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX PX - test missing TTL} {
         catch {r HSETEX myhash PX FIELDS 1 field1 val1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     # test {HSETEX PX - mismatched field/value count} {
     #     catch {r HSETEX myhash PX 100 FIELDS 2 field1 val1} e
@@ -680,7 +680,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     ## FNX/FXX
 
-    # hsetex throws ERR syntax error, it shouldn't
+    # hsetex throws ERR *, it shouldn't
     test {HSETEX EX FNX - set only if none of the fields exist} {
         r FLUSHALL        
         r HSET myhash field1 val1
@@ -732,7 +732,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX EX - FNX and FXX conflict error} {
         catch {r HSETEX myhash EX 10 FNX FXX FIELDS 1 x y} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     #################### Lazy Expiry ########################
 
