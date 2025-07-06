@@ -608,51 +608,49 @@ static inline uint32_t findInsertPosition(vsetGetExpiryFunc getExpiry, vsetBucke
     return left; // Final position to insert the element
 }
 
-/* findSplitPosition - Find the optimal split index in a sorted pointer vector
- *  based on coarse (bucketed) expiry timestamps.
- * Arguments
- * set:    Pointer to the `vset` containing the element type and expiry logic.
- * bucket: Pointer to a `vsetBucket` holding a sorted `pVector` of elements.
- * split_ts: an optional pointer to a location to store the split timestamp, that is the position
- * belonging in the lower split vector with the largest expiration time.
+/* findSplitPosition - Locate the first index where a bucket timestamp transition occurs
  *
- * This function searches for the earliest index at which the vector can be split into
- * two parts such that all elements in the first part are strictly less than all elements
- * in the second part, after mapping each element's expiry to a lower-resolution bucket.
- * The mapping is done using `get_bucket_ts(set->etypr->getExpiry(element))`.
+ * This function finds a split point in a sorted pointer vector (`pVector`) of elements,
+ * where elements are grouped by their coarse-grained expiry time buckets.
+ * The goal is to identify the first pair of adjacent elements `e[i-1]` and `e[i]`
+ * such that:
  *
- * This ensures that elements belonging to the same coarse-grained time bucket remain
- * in the same split group, which is useful for efficient time-based partitioning.
+ *     get_bucket_ts(getExpiry(e[i - 1])) < get_bucket_ts(getExpiry(e[i]))
  *
- * To do this efficiently, the function performs a binary search to locate the first
- * position where the bucketed expiry of the current item is greater than the bucketed
- * expiry of the previous item. This approach attempts to maximize the size of each
- * resulting split vector while ensuring that:
+ * The vector is assumed to be sorted by the raw expiry timestamp (in ascending order).
+ * Bucket timestamps are derived using `get_bucket_ts()` on each element's expiry value.
  *
- *     bucket_ts[element[i-1]] < bucket_ts[element[i]]
+ * Arguments:
+ *   - getExpiry: A function pointer that extracts an expiry timestamp from an element.
+ *   - bucket:    A pointer to a `vsetBucket` containing a sorted `pVector` of elements.
+ *   - split_ts_out (optional): If provided, it will be set to the bucket timestamp of
+ *                              the last element in the lower (left) partition.
  *
- * If no valid split is found (i.e. all elements map to the same bucket timestamp),
- * the function returns `pv->len` to indicate that splitting is not possible.
+ * The search begins from the middle of the vector and expands outwards in both
+ * directions, checking for the earliest position where a bucket transition occurs.
+ * This approach improves locality and helps produce balanced splits where possible.
+ *
+ * If a valid split is found, the function returns the index `i` at which the split
+ * should occur (i.e., elements `[0..i-1]` belong to one bucket, and `[i..len-1]` to another).
+ * If no split is found (i.e., all elements map to the same bucket), the function
+ * returns `pv->len`, indicating the entire vector belongs to one bucket.
  *
  * Return:
- *   - A valid split index in the range [1, pv->len], where the split occurs.
- *   - May return `pv->len` if no valid position is found.
+ *   - A split index in the range [1, pv->len), or
+ *   - `pv->len` if no transition is found (no split possible).
  *
  * Example:
  * --------
- * Suppose the vector contains elements with matching expiry timestamps:
- *     [1234, 1235, 1236, 4567, 4568]
+ * Raw expiry values:       [1001, 1002, 1003, 2048, 2049]
+ * Bucket timestamps:       [1024, 1024, 1024, 4096, 4096]
  *
- * And `get_bucket_ts()` maps them to:
- *     [1300, 1300, 1300, 5000, 5000]
+ * This function returns index 3, as:
+ *     get_bucket_ts(1003) == 1024
+ *     get_bucket_ts(2048) == 4096 → transition point
  *
- * Then `findSplitPosition(set, bucket)` returns 3, resulting in:
- *     First part:  [1234, 1235, 1236] (bucket 1300)
- *     Second part: [4567, 4568]       (bucket 5000)
- *
- * This guarantees that each vector contains elements with the same bucket timestamp,
- * and no value in the first part maps to the same or later bucket as the second part.
- */
+ * So the vector can be split as:
+ *   - Left partition:  [1001, 1002, 1003]
+ *   - Right partition: [2048, 2049] */
 static uint32_t findSplitPosition(vsetGetExpiryFunc getExpiry, vsetBucket *bucket, long long *split_ts_out) {
     pVector *pv = vsetBucketVector(bucket);
     if (!pv || pv->len < 2) return pv ? pv->len : 0;
