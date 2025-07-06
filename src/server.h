@@ -2943,6 +2943,7 @@ void dismissObject(robj *o, size_t dump_size);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
+robj *createStringObjectFromSds(sds s);
 robj *createRawStringObject(const char *ptr, size_t len);
 robj *tryCreateRawStringObject(const char *ptr, size_t len);
 robj *tryCreateStringObject(const char *ptr, size_t len);
@@ -3351,7 +3352,7 @@ void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 vset *hashTypeGetVolatileSet(robj *o);
-size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned int max_entries);
+size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);

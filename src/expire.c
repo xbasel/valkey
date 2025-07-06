@@ -250,13 +250,11 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             }
 
             if (it->current_key) {
-                hashTypeIgnoreTTL(it->current_key, 1);
+
                 size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t)(now / 1000),
                                                              entries_per_call);
-                if (!it->current_key) hashTypeIgnoreTTL(it->current_key, 0);
                 entries_processed += expired;
-                bool hasMore = hashTypeHasVolatileElements(it->current_key);
-                if (!hasMore || expired < entries_per_call) {
+                if (!hashTypeHasVolatileElements(it->current_key) || expired < entries_per_call) {
                     hashKeyDone(it);
                 }
             }
@@ -331,9 +329,6 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
      * existing inside the database. */
     long total_sampled = 0;
     long total_expired = 0;
-
-    /* Try to smoke-out bugs (server.also_propagate should be empty here) */
-    serverAssert(server.also_propagate.numops == 0);
 
     /* Stop iteration when one of the following conditions is met:
      *
@@ -538,6 +533,9 @@ void activeExpireCycle(int type) {
     if (timelimit <= 0) timelimit = 1;
 
     expiryDriver *first, *second;
+
+    /* Try to smoke-out bugs (server.also_propagate should be empty here) */
+    serverAssert(server.also_propagate.numops == 0);
 
     if (expireCycleStartWithFields) {
         first = activeExpireCycleFields;

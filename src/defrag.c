@@ -152,7 +152,6 @@ typedef struct {
     robj *o;
 } objectDbContext;
 
-
 /* When scanning a main kvstore, large elements are queued for later handling rather than
  * causing a large latency spike while processing a hash table bucket.  This list is only used
  * for stage: "defragStageDbKeys".  It will only contain values for the current kvstore being
@@ -471,7 +470,8 @@ static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid) {
     serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, db, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    objectDbContext ctx = {db, ob};
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 static void defragQuicklist(robj *ob) {
