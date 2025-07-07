@@ -510,13 +510,13 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore.  */
 int dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
-    int dict_index = getKVStoreIndexForKey(o->ptr);
+    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
 int dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
-    int dict_index = getKVStoreIndexForKey(o->ptr);
+    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
