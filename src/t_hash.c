@@ -130,9 +130,11 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
 }
 
 static inline void debugLogField(robj *key, void *entry) {
-    sds key2 = objectGetKey(key);
-    serverLog(LL_WARNING, "key %s field %s value %s expired",
-              key2, entryGetField(entry), entryGetValue(entry));
+    if (server.verbosity <= LL_VERBOSE) {
+        sds key2 = objectGetKey(key);
+        serverLog(LL_WARNING, "key %s field %s value %s expired",
+                  key2, entryGetField(entry), entryGetValue(entry));
+    }
 }
 
 hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {
@@ -2067,6 +2069,7 @@ static int expireEntry(void *entry, void *c) {
     int deleted = hashtablePop(ht, entry, &entry_ptr);
 
     if (deleted) {
+        debugLogField(o, entry_ptr);
         ctxAddEntry(ctx, entry_ptr);
         return 1;
     }
