@@ -250,7 +250,6 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             }
 
             if (it->current_key) {
-
                 size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t)(now / 1000),
                                                              entries_per_call);
                 entries_processed += expired;

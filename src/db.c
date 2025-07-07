@@ -490,7 +490,6 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == dbUntrackKeyWithVolaItems(db, val));
         }
 
-
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {

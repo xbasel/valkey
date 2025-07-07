@@ -2031,10 +2031,10 @@ void hrandfieldCommand(client *c) {
 
 /* Context structure for tracking expiry operations on hash fields. */
 typedef struct {
-    serverDb *db;          /* database pointer */
-    robj *key;             /* the hash object */
-    unsigned long n_entries;         /* number of entries processed */
-    void **entries;        /* array of expired entries to replicate and free later */
+    serverDb *db;            /* database pointer */
+    robj *key;               /* the hash object */
+    unsigned long n_entries; /* number of entries processed */
+    void **entries;          /* array of expired entries to replicate and free later */
 } expiryContext;
 
 /* Add an entry to the expiryContext list of processed entries. */
@@ -2098,8 +2098,8 @@ void freeArgvObjects(robj **argv, int argc) {
 static int buildExpireFieldsArgv(void **entries, int n_entries, robj *o, robj *argv[]) {
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
-    argv[argc++] = shared.hdel;    // HDEL command
-    argv[argc++] = keyobj;         // key name
+    argv[argc++] = shared.hdel; // HDEL command
+    argv[argc++] = keyobj;      // key name
     for (int i = 0; i < n_entries; i++) {
         // field to delete
         argv[argc++] = createStringObjectFromSds(entryGetField(entries[i]));
@@ -2119,9 +2119,8 @@ static int buildExpireFieldsArgv(void **entries, int n_entries, robj *o, robj *a
  * Returns the number of expired fields removed.
  */
 size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
-
     /* Sanity check to prevent excessive stack allocation from large VLAs.
-    * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
+     * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
     serverAssert(max_entries > 0 && max_entries <= 1024);
 
     serverAssert(o);
@@ -2151,7 +2150,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
 
     /* Build the argv for HDEL propagation */
     argc = buildExpireFieldsArgv(ctx.entries, ctx.n_entries, o, argv);
-    serverAssert(argc>=3); // Must contain valid HDEL command, HDEL key field ...
+    serverAssert(argc >= 3); // Must contain valid HDEL command, HDEL key field ...
 
     if (!hashTypeHasVolatileElements(o)) {
         hashTypeFreeVolatileSet(o);
