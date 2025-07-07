@@ -23,7 +23,7 @@
 
 /* Return values for expireIfNeeded */
 typedef enum {
-    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
+    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even nonexistent key. */
     KEY_EXPIRED,   /* Logically expired but not yet deleted. */
     KEY_DELETED    /* The key was deleted now. */
 } keyStatus;

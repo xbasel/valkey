@@ -1691,9 +1691,9 @@ void hpexpireAtCommand(client *c) {
  * - Validates that the number of provided fields matches the declared count.
  *
  * - For each specified field attempts to remove any existing expiration.
- * - Replies to the client  with an array of integers, each representing the result of persistence for one field:
+ * - Replies to the client with an array of integers, each representing the result of persistence for one field:
  *   - 1 if the expiration for the field was removed.
- *   - -1 if the field exists, but has no expiraiton time set.
+ *   - -1 if the field exists, but has no expiration time set.
  *   - -2 if the field does not exist or the hash is empty.
  *
  * - If any expirations were removed:
