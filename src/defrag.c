@@ -982,6 +982,16 @@ static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
 
+// Target is a DBID
+static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *target, void *privdata) {
+    UNUSED(privdata);
+    int dbid = (uintptr_t)target;
+    serverDb *db = server.db[dbid];
+    return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
+                                    scanHashtableCallbackCountScanned, NULL, NULL);
+}
+
+
 
 static doneStatus defragStagePubsubKvstore(monotime endtime, void *target, void *privdata) {
     // target is server.pubsub_channels or server.pubsubshard_channels
@@ -1249,6 +1259,7 @@ static void beginDefragCycle(void) {
         if (dbHasNoKeys(dbid)) continue;
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
+        addDefragStage(defragStageKeysWithvolaItemsKvstore, (void *)(uintptr_t)dbid, NULL);
     }
 
     static getClientChannelsFnWrapper getClientPubSubChannelsFn = {getClientPubSubChannels};
