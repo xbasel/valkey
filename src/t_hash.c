@@ -1650,7 +1650,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         }
         server.dirty += (expired + updated); // in case there was a change increment the dirty
-        signalModifiedKey(c, c->db, obj);
+        signalModifiedKey(c, c->db, c->argv[1]);
         /* Delete the object in case it was left empty */
         if (hashTypeLength(obj) == 0) {
             dbDelete(c->db, c->argv[1]);
@@ -1721,7 +1721,7 @@ void hpersistCommand(client *c) {
     }
     if (changes) {
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
-        signalModifiedKey(c, c->db, hash);
+        signalModifiedKey(c, c->db, c->argv[1]);
     }
 }
 
