@@ -836,9 +836,18 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
 static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
         void *e = NULL;
-
+        int maxtries = 100;
+        hashTypeIgnoreTTL(hashobj, true);
         while (!e) {
             hashtableFairRandomEntry(hashobj->ptr, &e);
+            if (entryIsExpired(e) && --maxtries) {
+                e = NULL;
+                continue;
+            } else if (maxtries == 0) {
+                field->sval = NULL;
+                if (val) val->sval = NULL;
+                break;
+            }
             sds sds_field = entryGetField(e);
             field->sval = (unsigned char *)sds_field;
             field->slen = sdslen(sds_field);
@@ -850,6 +859,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
                     sdslen(sds_val);
             }
         }
+        hashTypeIgnoreTTL(hashobj, false);
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
         lpRandomPair(hashobj->ptr, hashsize, field, val);
     } else {
@@ -1615,8 +1625,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     for (i = 0; i < num_fields; i++) {
         result = -2;
         if (set_expired) {
-            if (hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
-                /* In case we deleted the field, add it to the new hdel command vector. */
+            if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
+                /* In case we deleted the field, add it to the ew hdel command vector. */
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
                 result = 2;
@@ -1835,27 +1845,29 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
 
+    void *replylen = addReplyDeferredLen(c);
+    unsigned long reply_size = 0;
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
-        if (withvalues && c->resp == 2)
-            addWritePreparedReplyArrayLen(wpc, count * 2);
-        else
-            addWritePreparedReplyArrayLen(wpc, count);
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
-            while (count && hashtableSize(hash->ptr) > 0) {
-                void *entry;
-                hashtableFairRandomEntry(hash->ptr, &entry);
-                count--;
-                sds field = entryGetField(entry);
-                sds value = entryGetValue(entry);
+            while (count--) {
+                listpackEntry field, value;
+                hashTypeRandomElement(hash, size, &field, &value);
+
+                /* In case we were unable to locate random element, it is probably because there is no such element
+                 * since all elements are expired. */
+                if (!field.sval) break;
+
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-                addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+                addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
+                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value.sval, value.slen);
                 if (c->flag.close_asap) break;
+                reply_size++;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
             listpackEntry *fields, *vals = NULL;
@@ -1867,6 +1879,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             while (count) {
                 sample_count = count > limit ? limit : count;
                 count -= sample_count;
+                reply_size += sample_count;
                 lpRandomPairs(hash->ptr, sample_count, fields, vals);
                 hrandfieldReplyWithListpack(wpc, sample_count, fields, vals);
                 if (c->flag.close_asap) break;
@@ -1874,15 +1887,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             zfree(fields);
             zfree(vals);
         }
-        return;
+        goto set_deferred_response;
     }
-
-    /* Initiate reply count, RESP3 responds with nested array, RESP2 with flat one. */
-    long reply_size = count < size ? count : size;
-    if (withvalues && c->resp == 2)
-        addWritePreparedReplyArrayLen(wpc, reply_size * 2);
-    else
-        addWritePreparedReplyArrayLen(wpc, reply_size);
 
     /* CASE 2:
      * The number of requested elements is greater than the number of
@@ -1894,10 +1900,13 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_FIELD);
             if (withvalues) addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
+            reply_size++;
         }
         hashTypeResetIterator(&hi);
-        return;
+
+        goto set_deferred_response;
     }
+
 
     /* CASE 2.5 listpack only. Sampling unique elements, in non-random order.
      * Listpack encoded hashes are meant to be relatively small, so
@@ -1908,6 +1917,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
     if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+        reply_size = count < size ? count : size;
         listpackEntry *fields, *vals = NULL;
         fields = zmalloc(sizeof(listpackEntry) * count);
         if (withvalues) vals = zmalloc(sizeof(listpackEntry) * count);
@@ -1915,8 +1925,9 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         hrandfieldReplyWithListpack(wpc, count, fields, vals);
         zfree(fields);
         zfree(vals);
-        return;
+        goto set_deferred_response;
     }
+
     /* CASE 3:
      * The number of elements inside the hash is not greater than
      * HRANDFIELD_SUB_STRATEGY_MUL times the number of requested elements.
@@ -1938,16 +1949,17 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (hashtableNext(&iter, &entry)) {
             int res = hashtableAdd(ht, entry);
             serverAssert(res);
+            reply_size++;
         }
-        serverAssert(hashtableSize(ht) == size);
+        serverAssert(hashtableSize(ht) == reply_size);
         hashtableResetIterator(&iter);
 
         /* Remove random elements to reach the right count. */
-        while (size > count) {
+        while (reply_size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
             hashtableDelete(ht, element);
-            size--;
+            reply_size--;
         }
 
         /* Reply with what's in the temporary hashtable and release memory */
@@ -1978,8 +1990,12 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (added < count) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
-            /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+            /* In case we were unable to locate random element, it is probably because there is no such element
+             * since all elements are expired. */
+            if (!field.sval) break;
+
+            /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
+             * If it already exists free it, otherwise increment the number of objects we have
              * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {
@@ -1996,7 +2012,15 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
         /* Release memory */
         hashtableRelease(ht);
+        reply_size = added;
     }
+
+set_deferred_response:
+    /* Set the reply count, RESP3 responds with nested array, RESP2 with flat one. */
+    if (withvalues && c->resp == 2)
+        setDeferredArrayLen(c, replylen, reply_size * 2);
+    else
+        setDeferredArrayLen(c, replylen, reply_size);
 }
 
 /* HRANDFIELD key [<count> [WITHVALUES]] */
