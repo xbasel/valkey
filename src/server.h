@@ -3375,7 +3375,6 @@ robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(serverDb *db, robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(serverDb *targetdb, robj *o);
 bool hashTypeHasVolatileElements(robj *o);
-size_t hashTypeNumVolatileElements(robj *o);
 void hashTypeIgnoreTTL(robj *o, bool ignore);
 
 /* Pub / Sub */
