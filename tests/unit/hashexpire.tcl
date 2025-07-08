@@ -1,4 +1,3 @@
-
 proc info_field {info field} {
     foreach line [split $info "\n"] {
         if {[string match "$field:*" $line]} {
@@ -6,6 +5,58 @@ proc info_field {info field} {
         }
     }
     return [s field_name]
+}
+
+proc assert_keyevent_patterns {rd key args} {
+    foreach event_type $args {
+        set event [$rd read]
+        assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
+    }
+}
+
+proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired expected_increment} {
+    expr {
+        [$r HLEN $myhash] == $expected_len &&
+        [info_field [$r info stats] expired_subkeys] == ($initial_expired + $expected_increment)
+    }
+}
+
+proc get_short_expire_value {command} {
+    expr {
+        ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
+        ($command eq "HPEXPIRE" || $command eq "PX") ? 100 :
+        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
+        [clock milliseconds] + 100
+    }
+}
+
+proc setup_replication_test {primary replica primary_host primary_port} {
+    $primary FLUSHALL
+    $replica replicaof $primary_host $primary_port
+    wait_for_condition 50 100 {
+        [lindex [$replica role] 0] eq {slave} &&
+        [string match {*master_link_status:up*} [$replica info replication]]
+    } else {
+        fail "Can't turn the instance into a replica"
+    }
+    set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
+    set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+    return [list $primary_initial_expired $replica_initial_expired]
+}
+
+proc setup_single_keyspace_notification {r} {
+    $r config set notify-keyspace-events KEA
+    set rd [valkey_deferring_client]
+    assert_equal {1} [psubscribe $rd __keyevent@*]
+    return $rd
+}
+
+proc wait_for_active_expiry {r key expected_len initial_expired expected_increment {timeout 100} {interval 100}} {
+    wait_for_condition $timeout $interval {
+        [check_myhash_and_expired_subkeys $r $key $expected_len $initial_expired $expected_increment]
+    } else {
+        fail "Active expiry did not occur as expected"
+    }
 }
 
 proc assert_keyevent_pattern {rd event_type key} {
@@ -2538,5 +2589,1532 @@ tags {"aof external:skip"} {
                 assert_equal v$i [r HGET myhash f$i]
             }
         }
+    }
+}
+
+### ACTIVE EXPIRY TESTS ####
+##### HGETEX Active Expiry Tests #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+
+    foreach command {EX PX EXAT PXAT} {
+        test "HGETEX $command active expiry with single field" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
+            
+            # Use HGETEX to set expiry
+            assert_equal "v1" [r HGETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1]
+            wait_for_active_expiry r myhash 1 $initial_expired 1
+            assert_equal "{} v2" [r HGETEX myhash FIELDS 2 f1 f2]
+        }
+
+        test "HGETEX $command active expiry with multiple fields" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            r HSET myhash f1 v1 f2 v2 f3 v3
+            assert_equal 3 [r HLEN myhash]
+            
+            # Set expiry on multiple fields with HGETEX
+            assert_equal "v1 v3" [r HGETEX myhash $command [get_short_expire_value $command] FIELDS 2 f1 f3]
+                        
+            wait_for_active_expiry r myhash 1 $initial_expired 2
+            
+            # Verify only non-expired field remains
+            assert_equal "{} v2 {}" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        }
+
+        test "HGETEX $command active expiry removes entire key when last field expires" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            r HSET myhash f1 v1
+            assert_equal "v1" [r HGETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1]
+            wait_for_active_expiry r myhash 0 $initial_expired 1
+            assert_equal 0 [r EXISTS myhash]
+        }
+    }
+
+    test "HGETEX PERSIST removes expiry and prevents active expiry" {
+        r FLUSHALL
+
+        r HSET myhash f1 v1 f2 v2
+        assert_equal 2 [r HLEN myhash]
+        
+        # Set short expiry
+        assert_equal "v1" [r HGETEX myhash PX 1000 FIELDS 1 f1]
+        
+        # Immediately persist to prevent expiry
+        assert_equal "v1" [r HGETEX myhash PERSIST FIELDS 1 f1]
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+        
+        # Wait longer than original expiry time
+        after 200
+        
+        # Field should still exist due to PERSIST
+        assert_equal "v1" [r HGET myhash f1]
+        assert_equal 2 [r HLEN myhash]
+    }
+
+    test "HGETEX overwrite existing expiry with active expiry" {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1
+        assert_equal 1 [r HLEN myhash]
+        
+        # Set initial long expiry
+        r HEXPIRE myhash 10000 FIELDS 1 f1
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 5000
+        
+        # Use HGETEX to set shorter expiry
+        assert_equal "v1" [r HGETEX myhash PX 100 FIELDS 1 f1]
+        
+        # Wait for active expiry with new shorter time
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        
+        assert_equal 0 [r EXISTS myhash]
+    }
+}
+
+##### HGETEX Active Expiry Keyspace Notifications #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+    foreach command {EX PX EXAT PXAT} {
+        test "HGETEX $command keyspace notifications for active expiry" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
+
+            assert_equal 2 [r HLEN myhash]
+            set rd [setup_single_keyspace_notification r]
+            
+            # Set expiry with HGETEX
+            r HGETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1
+            
+            
+            wait_for_active_expiry r myhash 1 $initial_expired 1
+            assert_keyevent_patterns $rd myhash hexpire hexpired
+            $rd close
+        }
+    }
+    
+    test "HGETEX keyspace notification when key deleted with active expiry" {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1
+        assert_equal 1 [r HLEN myhash]
+        
+        set rd [setup_single_keyspace_notification r]
+        
+        # Set expiry on only field
+        r HGETEX myhash PX 100 FIELDS 1 f1
+        
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        assert_equal 0 [r EXISTS myhash]
+        # Should get both hexpired and del notifications
+        assert_keyevent_patterns $rd myhash hexpire hexpired del
+        $rd close
+    }
+}
+
+##### Active expiry test with 1 node #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+    set rd [valkey_deferring_client]
+    assert_equal {1} [psubscribe $rd __keyevent@*]
+
+    test {Active expiry deletes entire key when only field expires} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1
+        assert_equal 1 [r HLEN myhash]
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+
+        r HPEXPIRE myhash 100 FIELDS 1 f1
+
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+
+        # Key is deleted after its only field got expired
+        assert_match "" [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        assert_equal "" [r HGET myhash f1]
+        assert_equal 0 [r EXISTS myhash]
+        # Verify keyspace notifications
+        assert_keyevent_patterns $rd myhash hset hexpire hexpired del
+    }
+
+    test {Active expiry removes only expired field while preserving others} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1 f2 v2 f3 v3
+        assert_equal 3 [r HLEN myhash]
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+
+        r HPEXPIRE myhash 100 FIELDS 1 f1
+        set mem_before [r MEMORY USAGE myhash]
+
+        wait_for_active_expiry r myhash 2 $initial_expired 1
+
+        # Key still exists because it has 2 fields remaining
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        assert_equal "{} v2 v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        
+        # Verify memory decreased after field expiry
+        set mem_after [r MEMORY USAGE myhash]
+        assert_morethan $mem_before $mem_after
+
+        # Verify keyspace notifications
+        assert_keyevent_patterns $rd myhash hset hexpire hexpired
+    }
+
+    test {Active expiry reclaims memory correctly with large hash containing many fields} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        set value [string repeat x 1024]
+        set num_fields 10000
+        
+        # Set multiple fields
+        for {set i 1} {$i <= $num_fields} {incr i} {
+            lappend pairs "f$i" $value$i
+        }
+        r HSET myhash {*}$pairs
+        assert_equal $num_fields [r HLEN myhash]
+        
+        set mem_before_expire [r MEMORY USAGE myhash]
+        if {$mem_before_expire eq ""} {set mem_before_expire 0}
+        assert_morethan $mem_before_expire 15000000
+
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        assert_equal $num_fields [r HLEN myhash]
+
+        r HPEXPIRE myhash 100 FIELDS 1 f1
+        
+        wait_for_active_expiry r myhash [expr {$num_fields - 1}] $initial_expired 1
+
+        # Key still exists because it has num_fields 1 fields remaining
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        assert_equal "" [r HGET myhash f1]
+        for {set i 2} {$i <= $num_fields} {incr i} {
+            assert_equal $value$i [r HGET myhash "f$i"]
+        }
+        
+        # Expire all remaining fields
+        set all_field_names {}
+        for {set i 2} {$i <= $num_fields} {incr i} {
+            lappend all_field_names "f$i"
+        }
+        r HPEXPIRE myhash 100 FIELDS [expr {$num_fields - 1}] {*}$all_field_names
+        
+        wait_for_active_expiry r myhash 0 $initial_expired $num_fields
+
+        # Verify memory decreased by at least 15MB (size of hash key)
+        set mem_after_expire [r MEMORY USAGE myhash]
+        if {$mem_after_expire eq ""} {set mem_after_expire 0}
+        assert_morethan [expr {$mem_before_expire - $mem_after_expire}] 15000000
+
+        # Verify keyspace notifications
+        assert_keyevent_patterns $rd myhash hset hexpire hexpired hexpire hexpired
+        
+        # Wait for del, maximum num_fields reads
+        for {set i 2} {$i <= $num_fields} {incr i} {
+            if {[string match "pmessage __keyevent@* __keyevent@*:del myhash" [$rd read]]} {
+                break
+            }
+        }
+    }
+
+    test {Active expiry handles fields with different TTL values correctly} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1 f2 v2 f3 v3
+        assert_equal 3 [r HLEN myhash]
+
+        # Set very short expiry (1ms) and longer expiry (5000ms)
+        r HPEXPIRE myhash 1 FIELDS 1 f1
+        r HPEXPIRE myhash 5000 FIELDS 1 f2
+        # f3 has no expiry
+        
+        wait_for_active_expiry r myhash 2 $initial_expired 1
+        assert_equal "{} v2 v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+
+        # Verify f2 and f3 still exist after short time
+        after 100
+        assert_equal 2 [r HLEN myhash]
+        assert_equal "{} v2 v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        assert_keyevent_patterns $rd myhash hset hexpire hexpire hexpired
+    }
+
+    test {Active expiry removes only specified fields leaving others intact} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
+        assert_equal 5 [r HLEN myhash]
+
+        # Set expiry on alternating fields
+        r HPEXPIRE myhash 100 FIELDS 2 f1 f3
+        # f2, f4, f5 have no expiry
+
+        wait_for_active_expiry r myhash 3 $initial_expired 2
+
+        # Verify expired fields are gone and non-expired exists
+        assert_equal "{} v2 {} v4 v5" [r HGETEX myhash FIELDS 5 f1 f2 f3 f4 f5]
+
+        # Key should still exist
+        assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+    }
+
+    $rd close
+
+    test {Field TTL is removed when field value is overwritten with HSET} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        r HEXPIRE myhash 100000 FIELDS 1 f1
+        r HSET myhash f1 v2
+        # TTL should be removed after overwrite
+        assert_equal -1 [r HPTTL myhash FIELDS 1 f1]
+        # Field should still exist
+        assert_equal "v2" [r HGET myhash f1]
+    }
+
+    # Active expiry with field deletion and recreation
+    test {Field TTL is cleared when field is deleted and recreated} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        r HPEXPIRE myhash 100 FIELDS 1 f1
+        r HDEL myhash f1
+        r HSET myhash f1 v2
+        assert_equal -1 [r HPTTL myhash FIELDS 1 f1]
+        after 200
+        assert_equal v2 [r HGET myhash f1]
+    }
+}
+
+##### Test Active Expiry Tests with all hash expire commands #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+
+    foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+        test "$command active expiry on single field" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
+            
+            # Set expiry based on command type
+            r $command myhash [get_short_expire_value $command] FIELDS 1 f1
+            
+            # Wait for active expiry
+            wait_for_active_expiry r myhash 1 $initial_expired 1
+            
+            # Verify only expired field is gone
+            assert_equal "{} v2" [r HGETEX myhash FIELDS 2 f1 f2]
+        }
+
+        test "$command active expiry with multiple fields" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
+            assert_equal 4 [r HLEN myhash]
+            
+            # Set expiry on multiple fields
+            r $command myhash [get_short_expire_value $command] FIELDS 3 f1 f2 f4
+            
+            # Wait for active expiry
+            wait_for_active_expiry r myhash 1 $initial_expired 3
+            
+            # Only f3 should remain
+            assert_equal "{} {} v3 {}" [r HGETEX myhash FIELDS 4 f1 f2 f3 f4]
+        }
+
+        test "$command active expiry removes entire key when last field expires" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1
+            assert_equal 1 [r HLEN myhash]
+            
+            # Set expiry on only field
+            r $command myhash [get_short_expire_value $command] FIELDS 1 f1
+            
+            
+            # Wait for active expiry to remove key
+            wait_for_active_expiry r myhash 0 $initial_expired 1
+            
+            assert_equal 0 [r EXISTS myhash]
+        }
+
+        test "$command active expiry with non-existing fields" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
+            
+            # Try to expire non-existing fields
+            r $command myhash [get_short_expire_value $command] FIELDS 2 f3 f4
+            
+            
+            # Wait to ensure no active expiry occurs
+            after 1500
+            assert [check_myhash_and_expired_subkeys r myhash 2 $initial_expired 0]
+        }
+
+        test "$command active expiry with mixed existing and non-existing fields" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            r HSET myhash f1 v1 f2 v2 f3 v3
+            assert_equal 3 [r HLEN myhash]
+            
+            # Mix of existing and non-existing fields
+            r $command myhash [get_short_expire_value $command] FIELDS 4 f1 f4 f3 f5
+            
+            
+            # Wait for active expiry of existing fields only
+            wait_for_active_expiry r myhash 1 $initial_expired 2
+            
+            # Only f2 should remain
+            assert_equal "{} v2 {}" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        }
+
+        test "$command active expiry with already expired fields" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 v1 f2 v2 f3 v3
+            assert_equal 3 [r HLEN myhash]
+            
+            # Set very short expiry on f1
+            r $command myhash [get_short_expire_value $command] FIELDS 1 f1
+            
+            
+            # Wait for active expiry
+            wait_for_active_expiry r myhash 2 $initial_expired 1
+            
+            # Now try to expire f1 again (already expired) and f2 (existing)
+            r $command myhash [get_short_expire_value $command] FIELDS 2 f1 f2
+            
+            # Wait for f2 to expire
+            wait_for_active_expiry r myhash 1 $initial_expired 2
+            
+            # Only f3 should remain
+            assert_equal "{} {} v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        }
+    }
+}
+
+##### Active expiry test slot migration #####
+start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}} {
+    # Flush all data on all cluster nodes before starting
+    for {set i 0} {$i < 3} {incr i} {
+        R $i FLUSHALL
+    }
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+
+    # Use a fixed hash tag to ensure key is in one slot
+    set key "{mymigrate}myhash"
+
+    test {Hash field TTL values and active expiry state preserved during cluster slot migration} {
+        set initial_expired [info_field [R 0 info stats] expired_subkeys]
+        
+        R 0 HSET $key f1 v1 f2 v2 f3 v3
+        assert_equal 3 [R 0 HLEN $key]
+
+        set far_exp [expr {[clock seconds] + 30000}]
+        R 0 HEXPIREAT $key $far_exp FIELDS 1 f1 ; # f1 with far expire
+        R 0 HPEXPIRE $key 100 FIELDS 1 f2 ; # f2 with short expire
+        
+        # Wait for short expire field (f2) to be expired by active expire
+        wait_for_condition 100 100 {
+            [R 0 HLEN $key] eq 2 &&
+            [info_field [R 0 info stats] expired_subkeys] eq [expr {$initial_expired + 1}]
+        } else {
+            fail "Fields should have expired"
+        }
+        
+        # Verify expired field returns empty string and non-expired returns value
+        assert_equal "v1 {} v3" [R 0 HMGET $key f1 f2 f3]
+
+        # Prepare slot migration
+        set slot [R 0 CLUSTER KEYSLOT $key]
+        assert_equal OK [R 1 CLUSTER SETSLOT $slot IMPORTING $R0_id]
+        assert_equal OK [R 0 CLUSTER SETSLOT $slot MIGRATING $R1_id]
+
+        # Migrate key to destination node
+        R 0 MIGRATE [srv -1 host] [srv -1 port] $key 0 5000
+        
+        # Complete slot migration
+        R 0 CLUSTER SETSLOT $slot NODE $R1_id
+        R 1 CLUSTER SETSLOT $slot NODE $R1_id
+
+        set initial_expired [info_field [R 1 info stats] expired_subkeys]
+        
+        # Verify after slot migration all fields are present and ttl is kept
+        assert_match {1} [scan [regexp -inline {keys=([\d]*)} [R 1 info keyspace]] keys=%d]
+        assert_equal 2 [R 1 HLEN $key]
+        assert_equal "v1 {} v3" [R 1 HMGET $key f1 f2 f3]
+        assert_equal -1 [R 1 HTTL $key FIELDS 1 f3]
+        assert_equal $far_exp [R 1 HEXPIRETIME $key FIELDS 1 f1]
+        assert_equal -2 [R 1 HTTL $key FIELDS 1 f2]
+
+        # Set short expiration on all fields (some do not exist)
+        R 1 HPEXPIRE $key 100 FIELDS 3 f1 f2 f3
+        
+        # Verify active expiry
+        wait_for_condition 200 50 {
+            [R 1 HLEN $key] eq 0 &&
+            [info_field [R 1 info stats] expired_subkeys] eq [expr {$initial_expired + 2}]
+        } else {
+            fail "All fields should have expired"
+        }
+        assert_match "" [scan [regexp -inline {keys=([\d]*)} [R 1 info keyspace]] keys=%d]
+    }
+}
+
+##### Active expiry test slot migration with multiple fields #####
+start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}} {
+    # Flush all data on all cluster nodes before starting
+    for {set i 0} {$i < 3} {incr i} {
+        R $i FLUSHALL
+    }
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+
+    # Use a fixed hash tag to ensure key is in one slot
+    set key "{mymigrate}myhash"
+
+    test {Large hash with mixed TTL fields maintains expiry state after cluster slot migration} {
+        set initial_expired [info_field [R 0 info stats] expired_subkeys]
+        set num_fields 100
+
+        # Create hash fields
+        for {set i 1} {$i <= $num_fields} {incr i} {
+            lappend pairs "f$i" "v$i"
+        }
+        R 0 HSET $key {*}$pairs
+        assert_equal $num_fields [R 0 HLEN $key]
+
+        set far_exp [expr {[clock seconds] + 30000}]
+        # Set large TTL on 25 fields
+        for {set i 1} {$i <= 25} {incr i} {
+            R 0 HEXPIREAT $key $far_exp FIELDS 1 "f$i"
+        }
+
+        # Set short TTL on 25 fields
+        for {set i 26} {$i <= 50} {incr i} {
+            R 0 HPEXPIRE $key 100 FIELDS 1 "f$i"
+        }
+        
+        # wait for short expire field to be expired by active expire
+        wait_for_condition 100 100 {
+            [R 0 HLEN $key] eq 75 &&
+            [info_field [R 0 info stats] expired_subkeys] eq [expr {$initial_expired + 25}]
+        } else {
+            fail "Fields should have expired"
+        }
+        
+        # Verify expired fields return empty string and non-expired return values
+        for {set i 26} {$i <= 50} {incr i} {
+            assert_equal "" [R 0 HGET $key "f$i"]
+        }
+        for {set i 1} {$i <= 25} {incr i} {
+            assert_equal "v$i" [R 0 HGET $key "f$i"]
+        }
+        for {set i 51} {$i <= $num_fields} {incr i} {
+            assert_equal "v$i" [R 0 HGET $key "f$i"]
+        }
+
+        # Prepare slot migration
+        set slot [R 0 CLUSTER KEYSLOT $key]
+        assert_equal OK [R 1 CLUSTER SETSLOT $slot IMPORTING $R0_id]
+        assert_equal OK [R 0 CLUSTER SETSLOT $slot MIGRATING $R1_id]
+
+        # Migrate key to destination node
+        R 0 MIGRATE [srv -1 host] [srv -1 port] $key 0 5000
+        
+        # Complete slot migration
+        R 0 CLUSTER SETSLOT $slot NODE $R1_id
+        R 1 CLUSTER SETSLOT $slot NODE $R1_id
+        
+        set initial_expired [info_field [R 1 info stats] expired_subkeys]
+        # Verify after slot migration all fields are present and ttl is kept
+        assert_equal 75 [R 1 HLEN $key]
+        for {set i 1} {$i <= $num_fields} {incr i} {
+            if {$i > 50} {
+                assert_equal -1 [R 1 HTTL $key FIELDS 1 "f$i"]
+                assert_equal "v$i" [R 1 HGET $key "f$i"]
+            } else {
+                if {$i <= 25} {
+                    assert_equal $far_exp [R 1 HEXPIRETIME $key FIELDS 1 f$i]
+                    assert_equal "v$i" [R 1 HGET $key "f$i"]
+                } else {
+                    assert_equal -2 [R 1 HTTL $key FIELDS 1 "f$i"]
+                    assert_equal "" [R 1 HGET $key "f$i"]
+                }
+            }
+        }
+
+        # Set short expiration on all fields (some do not exist)
+        set fields {}
+        for {set i 1} {$i <= 100} {incr i} {
+            lappend fields "f$i"
+        }
+        R 1 HPEXPIRE $key 100 FIELDS 100 {*}$fields
+        
+        # Verify active expiry
+        wait_for_condition 200 50 {
+            [R 1 HLEN $key] eq 0 &&
+            [info_field [R 1 info stats] expired_subkeys] eq [expr {$initial_expired + 75}]
+        } else {
+            fail "All fields should have expired"
+        }
+    }
+}
+
+##### Active expiry test replication #####
+start_server {tags {"hashexpire external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {tags {needs:repl external:skip}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        # Set this inner layer server as replica
+        set replica [srv 0 client]
+
+        test {Hash field active expiry on primary triggers HDEL replication to replica} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+
+            # Create hash and timing f1 < f2 expiry times
+            set f1_exp [expr {[clock seconds] + 10000}]
+
+            # Setup hash, set expire and set expire 0
+            $primary HSET myhash f1 v1 f2 v2 ;# Should trigger hset
+            wait_for_ofs_sync $primary $replica
+            
+            $primary HPEXPIRE myhash 500 FIELDS 1 f1 ;# Should trigger 1 hexpire and then hexpired (for primary) and 1 hdel (for replica)
+            wait_for_ofs_sync $primary $replica
+            
+            # Wait for active expiry
+            wait_for_active_expiry $primary myhash 1 $primary_initial_expired 1
+            # Ensure the replica does not increment expired_subkeys
+            assert_equal $replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            
+            # Verify expired field returns empty string and non-expired returns value
+            foreach instance [list $primary $replica] {
+                assert_equal "" [$instance HGET myhash f1]
+                assert_equal "v2" [$instance HGET myhash f2]
+            }
+            
+            # Verify keyspace notification
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hset
+                assert_keyevent_patterns $rd myhash hexpire
+            }
+            # primary gets hexpired and replica gets hdel
+            assert_keyevent_patterns $rd_primary myhash hexpired
+            assert_keyevent_patterns $rd_replica myhash hdel
+
+            $rd_primary close
+            $rd_replica close
+        }
+
+        start_server {tags {needs:repl external:skip}} {
+            $primary FLUSHALL
+            set replica_2 [srv 0 client]
+            set replica_2_host [srv 0 host]
+            set replica_2_port [srv 0 port]
+            
+            test {Hash field TTL and active expiry propagates correctly through chain replication} {
+                $replica replicaof $primary_host $primary_port
+                # Wait for R2 to connect to R1
+                wait_for_condition 100 100 {
+                    [info_field [$replica info replication] master_link_status] eq "up"
+                } else {
+                    fail "Replica <-> Primary connection not established"
+                }
+
+                $replica_2 replicaof $replica_host $replica_port
+                # Wait for R2 to connect to R1
+                wait_for_condition 100 100 {
+                    [info_field [$replica info replication] master_link_status] eq "up"
+                } else {
+                    fail "Second replica <-> First replica connection not established"
+                }
+
+                # Initialize deferred clients and subscribe to keyspace notifications
+                foreach instance [list $primary $replica $replica_2] {
+                    $instance config set notify-keyspace-events KEA
+                }
+                set rd_primary [valkey_deferring_client -2]
+                set rd_replica [valkey_deferring_client -1]
+                set rd_replica_2 [valkey_deferring_client $replica_2_host $replica_2_port]
+                foreach rd [list $rd_primary $rd_replica $rd_replica_2] {
+                    assert_equal {1} [psubscribe $rd __keyevent@*]
+                }
+    
+                # Create hash and timing f1 < f2 expiry times
+                set f1_exp [expr {[clock seconds] + 10000}]
+
+                ############################################# STEUP HASH #############################################
+                $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+                $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
+                wait_for_ofs_sync $primary $replica
+                wait_for_ofs_sync $replica $replica_2
+
+                set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
+                set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+                set replica_2_initial_expired [info_field [$replica_2 info stats] expired_subkeys]
+                
+                $primary HPEXPIRE myhash 100 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 2 hdel (for replicas)
+                wait_for_ofs_sync $primary $replica
+                wait_for_ofs_sync $replica $replica_2
+                
+                # Wait for active expire
+                wait_for_active_expiry $primary myhash 1 $primary_initial_expired 1
+                
+                # Ensure the replica does not increment expired_subkeys
+                assert_equal $replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+                assert_equal $replica_2_initial_expired [info_field [$replica_2 info stats] expired_subkeys]
+            
+
+                # Verify expired field returns empty string and non-expired returns value
+                foreach instance [list $primary $replica $replica_2] {
+                    assert_equal "" [$instance HGET myhash f1]
+                    assert_equal "v2" [$instance HGET myhash f2]
+                }
+                
+                # primary gets hexpired and replicas get hdel
+                foreach rd [list $rd_primary $rd_replica $rd_replica_2] {
+                    assert_keyevent_patterns $rd myhash hset hexpire hexpire
+                }
+                assert_keyevent_patterns $rd_primary myhash hexpired
+                assert_keyevent_patterns $rd_replica myhash hdel
+                assert_keyevent_patterns $rd_replica_2 myhash hdel
+
+                $rd_primary close
+                $rd_replica close
+                $rd_replica_2 close
+            }
+        }
+    
+        proc verify_values {instance f1_exp f2_exp} {
+            assert_equal $f1_exp [$instance HEXPIRETIME myhash FIELDS 1 f1]
+            assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
+            assert_equal -1 [$instance HTTL myhash FIELDS 1 f3]
+            assert_match {1} [scan [regexp -inline {keys=([\d]*)} [$instance info keyspace]] keys=%d]
+            assert_equal "v1" [$instance HGET myhash f1]
+            assert_equal "v2" [$instance HGET myhash f2]
+            assert_equal "v3" [$instance HGET myhash f3]
+            assert_equal 3 [$instance HLEN myhash]
+        }
+
+        test {Hash field TTL values remain intact after replica promotion to primary} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+            
+            # Create hash fields with TTL on primary
+            set f1_exp [expr {[clock seconds] + 2000}]
+            set f2_exp [expr {[clock seconds] + 300000}]
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1
+            $primary HEXPIREAT myhash $f2_exp FIELDS 1 f2
+            # f3 remains persistent
+
+            # Wait for full sync
+            wait_for_ofs_sync $primary $replica
+
+            # Verify primary and replica are the same
+            foreach instance [list $primary $replica] {
+                verify_values $instance $f1_exp $f2_exp
+            }
+
+            # Perform failover
+            $replica replicaof no one
+            # Wait for replica to become primary
+            wait_for_condition 100 100 {
+                [info_field [$replica info replication] role] eq "master"
+            } else {
+                fail "Replica didn't become master"
+            }
+
+            # Check all values that checked before are the same
+            verify_values $replica $f1_exp $f2_exp
+            
+            # Set f1 to expire in 1 second and wait for active expiration
+            set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            $replica HEXPIRE myhash 1 FIELDS 1 f1
+            wait_for_active_expiry $replica myhash 2 $replica_initial_expired 1
+
+            assert_equal "{} v2 v3" [$replica HMGET myhash f1 f2 f3]
+            # Not affected primary
+            assert_equal 3 [$primary HLEN myhash]
+            assert_equal "v1 v2 v3" [$primary HMGET myhash f1 f2 f3]
+            set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
+            assert_equal 0 [expr {[info_field [$primary info stats] expired_subkeys] - $primary_initial_expired}]
+
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hset hexpire hexpire
+            }
+            assert_keyevent_patterns $rd_replica myhash hexpire
+            assert_keyevent_patterns $rd_replica myhash hexpired
+            $rd_primary close
+            $rd_replica close
+        }
+
+        test {Hash field TTL values persist correctly during FAILOVER command execution} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+            
+            # Create hash fields with TTL on primary
+            set f1_exp [expr {[clock seconds] + 2000}]
+            set f2_exp [expr {[clock seconds] + 300000}]
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1
+            $primary HEXPIREAT myhash $f2_exp FIELDS 1 f2
+            # f3 remains persistent
+
+            # Wait for full sync
+            wait_for_ofs_sync $primary $replica
+
+            # Verify primary and replica are the same
+            foreach instance [list $primary $replica] {
+                verify_values $instance $f1_exp $f2_exp
+            }
+
+            # Perform failover swap roles
+            $primary FAILOVER TO $replica_host $replica_port
+            # Wait for role swap
+            wait_for_condition 100 100 {
+                [info_field [$replica info replication] role] eq "master" &&
+                [info_field [$primary info replication] role] eq "slave"
+            } else {
+                fail "Failover didn't complete"
+            }
+
+            # Verify primary and replica are still the same
+            foreach instance [list $primary $replica] {
+                verify_values $instance $f1_exp $f2_exp
+            }
+            
+            # Set f1 to expire in 1 second and wait for active expiration
+            $replica HEXPIRE myhash 1 FIELDS 1 f1 ;# will trigger hexpire
+            wait_for_ofs_sync $replica $primary
+            set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            wait_for_active_expiry $replica myhash 2 $replica_initial_expired 1
+
+            # Verify prev primary, which is now replica of new primary (prev primary) is sync
+            assert_equal 2 [$primary HLEN myhash]
+            # Verify expiry
+            assert_equal "{} v2 v3" [$replica HMGET myhash f1 f2 f3]
+            assert_equal "" [$primary HGET myhash f1]
+            assert_equal "v2" [$primary HGET myhash f2]
+            assert_equal "v3" [$primary HGET myhash f3]
+
+            # Primary is now replica, so no expected change in expired_subkeys
+            assert_equal [info_field [$primary info stats] expired_subkeys] $primary_initial_expired
+
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hset hexpire hexpire hexpire
+            }
+            assert_keyevent_patterns $rd_replica myhash hexpired
+            assert_keyevent_patterns $rd_primary myhash hdel
+            $rd_primary close
+            $rd_replica close
+        }
+    }
+}
+
+## Check monitor tests ###
+start_server {tags {"hashexpire external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {tags {needs:repl external:skip}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        # Set this inner layer server as replica
+        set replica [srv 0 client]
+
+        proc setup_replica_monitor_test {primary replica primary_host primary_port replica_host replica_port} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            set rd_replica [valkey_deferring_client $replica_host $replica_port]
+            $rd_replica monitor
+            assert_match {*OK*} [$rd_replica read]
+            
+            return [list $primary_initial_expired $rd_replica]
+        }
+        
+        proc read_monitor_output {rd_replica read_amount} {
+            set res {}
+            for {set i 0} {$i <= $read_amount} {incr i} {
+                set curr_read [$rd_replica read]
+                lappend res $curr_read
+                # lappend res [$rd_replica read]
+            }
+            $rd_replica close
+            return [join $res " "]
+        }
+
+        test {Multiple expired hash fields are replicated as single HDEL command to replica} {
+            lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            wait_for_ofs_sync $primary $replica
+            $primary HPEXPIRE myhash 50 FIELDS 1 f2
+            wait_for_ofs_sync $primary $replica
+            wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
+            set _ [read_monitor_output $rd_replica 5]
+        } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f2*}
+
+        test {HDEL replication includes only actually expired fields not non-existent ones} {
+            lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
+            
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            wait_for_ofs_sync $primary $replica
+            $primary HPEXPIRE myhash 50 FIELDS 2 f1 f5
+            wait_for_ofs_sync $primary $replica
+            wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
+            set _ [read_monitor_output $rd_replica 4]
+        } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f1*}
+    }
+}
+
+## expired_subkeys Tests ####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+    test {expired_subkeys metric increments by one when single hash field expires} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        
+        # Create hash with fields and ttl
+        r HSET myhash f1 v1 f2 v2 f3 v3
+        assert_equal 3 [r HLEN myhash]
+
+        # Force expiration by setting very short TTL
+        r HPEXPIRE myhash 1 FIELDS 1 f1
+        
+        # Wait for expiration
+        wait_for_active_expiry r myhash 2 $initial_expired 1
+        
+        # Check expired_subkeys incremented
+        assert_equal 1 [info_field [r info stats] expired_subkeys]
+        
+        # Verify expired field returns empty string and non-expired return values
+        assert_equal "{} v2 v3" [r HMGET myhash f1 f2 f3]
+    }
+
+    test {expired_subkeys metric tracks multiple field expirations with keyspace notifications} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        
+        set rd [setup_single_keyspace_notification r]
+        
+        # Create hash with expiring fields
+        r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
+        r HEXPIRE myhash 1000 FIELDS 1 f1
+        r HEXPIRE myhash 2000 FIELDS 1 f2
+        
+        # Force expiration with short ttl
+        r HPEXPIRE myhash 1 FIELDS 1 f1
+        
+        # Wait for expiration
+        wait_for_active_expiry r myhash 4 $initial_expired 1
+        
+        # Verify expired_subkeys incremented
+        assert_equal 1 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        
+        # Verify expired field returns empty string and non-expired return values
+        assert_equal "{} v2 v3 v4 v5" [r HMGET myhash f1 f2 f3 f4 f5]
+        
+        # Test HPERSIST remove TTL from f2
+        r HPERSIST myhash FIELDS 1 f2
+        
+        # Verify f2 no longer has TTL
+        assert_equal -1 [r HTTL myhash FIELDS 1 f2]
+        assert_equal 1 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+
+        # Expire 2 fields at once
+        r HPEXPIRE myhash 1 FIELDS 2 f4 f5
+        wait_for_active_expiry r myhash 2 $initial_expired 3
+        assert_equal 3 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        
+        # Verify expired fields return empty string and non-expired return values
+        assert_equal "{} v2 v3 {} {}" [r HMGET myhash f1 f2 f3 f4 f5]
+
+        # Wait for hset and hexpire events
+        assert_keyevent_patterns $rd myhash hset hexpire hexpire hexpire hexpired hpersist hexpire hexpired
+        $rd close
+    }
+}
+
+
+start_server {tags {"hashexpire external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {tags {needs:repl external:skip}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+
+        test {expired_subkeys metric increments only on primary not replica during field expiry} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            
+            # Create hash fields with different TTLs
+            $primary HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
+            $primary HEXPIRE myhash 3000 FIELDS 1 f1
+            $primary HSETEX myhash EX 5000 FIELDS 1 f2 v2
+            $primary HEXPIRE myhash 60000 FIELDS 1 f3
+            wait_for_ofs_sync $primary $replica
+
+            # Verify PERSIST
+            assert_equal "v3" [$primary HGETEX myhash PERSIST FIELDS 1 f3]
+            wait_for_ofs_sync $primary $replica
+            assert_equal -1 [$primary HTTL myhash FIELDS 1 f3]
+            assert_equal -1 [$replica HTTL myhash FIELDS 1 f3]
+
+            $primary HPEXPIRE myhash 1 FIELDS 1 f1
+            wait_for_ofs_sync $primary $replica
+            # Wait for active expiry
+            wait_for_active_expiry $primary myhash 3 $primary_initial_expired 1
+
+            assert_equal 0 [info_field [$replica info stats] expired_subkeys]
+        }
+    }
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {tags {needs:repl external:skip}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+
+        test {expired_subkeys metric correctly tracks sequential field expirations in replication} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+            
+            # Create hash fields with different TTLs
+            $primary HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
+            $primary HEXPIRE myhash 3000 FIELDS 1 f1
+            $primary HSETEX myhash EX 5000 FIELDS 1 f2 v2
+            $primary HEXPIRE myhash 60000 FIELDS 1 f3
+            wait_for_ofs_sync $primary $replica
+
+            # Verify TTLs are set correctly
+            assert_morethan [$primary HTTL myhash FIELDS 1 f1] 0
+            assert_morethan [$primary HTTL myhash FIELDS 1 f2] 0
+            assert_morethan [$primary HTTL myhash FIELDS 1 f3] 0
+            assert_equal -1 [$primary HTTL myhash FIELDS 1 f4]
+
+            assert_equal 4 [$primary HLEN myhash]
+            assert_equal 4 [$replica HLEN myhash]
+
+            # Verify values
+            assert_equal "v1 v2 v3 v4" [$primary HMGET myhash f1 f2 f3 f4]
+            assert_equal "v1 v2 v3 v4" [$replica HMGET myhash f1 f2 f3 f4]
+
+            # Verify PERSIST
+            assert_equal "v3" [$primary HGETEX myhash PERSIST FIELDS 1 f3]
+            wait_for_ofs_sync $primary $replica
+            assert_equal -1 [$primary HTTL myhash FIELDS 1 f3]
+            assert_equal -1 [$replica HTTL myhash FIELDS 1 f3]
+
+            # Expire fields one by one
+            for {set i 1} {$i <= 4} {incr i} {
+                assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [$primary info keyspace]] keys=%d]
+                assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [$replica info keyspace]] keys=%d]
+                
+                # Set field to expire immediately
+                $primary HPEXPIRE myhash 1 FIELDS 1 f$i
+                wait_for_ofs_sync $primary $replica
+            
+                # Wait for active expiry
+                wait_for_active_expiry $primary myhash [expr {4 - $i}] $primary_initial_expired $i
+
+                # Replica should NOT increment expired_subkeys
+                assert_equal 0 [info_field [$replica info stats] expired_subkeys]
+                
+                # Replica should also have the field removed with replication
+                assert_equal [expr {4 - $i}] [$replica HLEN myhash]
+            }
+            
+            # Hash should be deleted when all fields expire
+            assert_equal 0 [$primary EXISTS myhash]
+            assert_equal 0 [$replica EXISTS myhash]
+            assert_match "" [scan [regexp -inline {keys\=([\d]*)} [$primary info keyspace]] keys=%d]
+            assert_match "" [scan [regexp -inline {keys\=([\d]*)} [$replica info keyspace]] keys=%d]
+                
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hset hexpire hset hexpire hexpire hpersist hexpire
+            }
+            assert_keyevent_patterns $rd_primary myhash hexpired ; # f1
+            assert_keyevent_patterns $rd_replica myhash hdel
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hexpire
+            }
+            assert_keyevent_patterns $rd_primary myhash hexpired ; # f2
+            assert_keyevent_patterns $rd_replica myhash hdel
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hexpire
+            }
+            assert_keyevent_patterns $rd_primary myhash hexpired ; # f3
+            assert_keyevent_patterns $rd_replica myhash hdel
+            foreach rd [list $rd_primary $rd_replica] {
+                assert_keyevent_patterns $rd myhash hexpire
+            }
+            assert_keyevent_patterns $rd_primary myhash hexpired del ; # f4
+            assert_keyevent_patterns $rd_replica myhash del
+            $rd_primary close
+            $rd_replica close
+        }
+    }
+}
+
+#### CLIENT PAUSE WRITE prevents active expiration test #####
+start_server {tags {"hashexpire external:skip"}} {
+    test "CLIENT PAUSE WRITE blocks hash field active expiry until pause ends" {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+
+        r HSET myhash f1 v1 f2 v2
+        assert_equal 2 [r HLEN myhash]
+
+        # To avoid flakiness - run commands in transaction
+        r multi
+        
+        r HPEXPIRE myhash 500 FIELDS 1 f1
+        r CLIENT PAUSE 1200 WRITE
+        
+        r exec
+        
+        # Verify no expiry happened immediately after transaction
+        assert_equal 2 [r HLEN myhash]
+        assert_equal 0 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        
+        # Wait longer than expiry time while paused
+        after 600
+        
+        # Field should still exist because active expiry is paused
+        assert_equal 2 [r HLEN myhash]
+        assert_equal 0 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        
+        # Wait for pause to end
+        after 600
+        
+        # Now active expiry should work
+        wait_for_active_expiry r myhash 1 $initial_expired 1 50 20
+        
+        assert_equal "{} v2" [r HMGET myhash f1 f2]
+    }
+}
+
+
+##### Active Expiry Tests After RENAME/COPY/RESTORE Operations #####
+start_server {tags {"hashexpire external:skip"}} {
+    foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+        foreach op {RENAME COPY RESTORE MOVE} {
+            test "$command active expiry works correctly after $op operation" {
+                r FLUSHALL
+                r SELECT 0
+                set initial_expired [info_field [r info stats] expired_subkeys]
+
+                r HSET myhash f1 v1 f2 v2 f3 v3
+                assert_equal 3 [r HLEN myhash]
+                
+                # Set expiry on fields
+                r $command myhash [get_short_expire_value $command] FIELDS 1 f1
+                
+                wait_for_active_expiry r myhash 2 $initial_expired 1
+
+                # Run op command
+                if {$op eq "RENAME"} {
+                    r RENAME myhash newhash
+                    set target_key newhash
+                } elseif {$op eq "COPY"} {
+                    r COPY myhash copyhash
+                    set target_key copyhash
+                } elseif {$op eq "RESTORE"} {
+                    # RESTORE
+                    set serialized [r DUMP myhash]
+                    r DEL myhash
+                    r RESTORE restorehash 0 $serialized
+                    set target_key restorehash
+                } else {
+                    r MOVE myhash 1
+                    # Switch to target DB
+                    r SELECT 1
+                    set target_key myhash
+                }
+
+                # Set expiry on fields after op command
+                r $command $target_key [get_short_expire_value $command] FIELDS 1 f3
+                
+                # Wait for active expiry on "new" key
+                wait_for_active_expiry r $target_key 1 $initial_expired 2
+                
+                assert_equal "{} v2 {}" [r HMGET $target_key f1 f2 f3]
+                # In copy verify original hash hasnt changed
+                if {$op eq "COPY"} {
+                    assert_equal "{} v2 v3" [r HMGET myhash f1 f2 f3]
+                }
+            }
+        }
+    }
+}
+foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+    start_server {tags {"hashexpire external:skip"}} {
+        test "$command active expiry processes multiple hash keys with different field counts" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            # Create multiple hash keys
+            for {set i 1} {$i <= 5} {incr i} {
+                r HSET hash$i f1 v1_$i f2 v2_$i f3 v3_$i
+            }
+            assert_match {5} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            
+            r $command hash1 [get_short_expire_value $command] FIELDS 1 f1
+            r $command hash2 [get_short_expire_value $command] FIELDS 2 f1 f2
+            r $command hash3 [get_short_expire_value $command] FIELDS 3 f1 f2 f3
+            r $command hash4 [get_short_expire_value $command] FIELDS 1 f2
+            
+            wait_for_condition 100 100 {
+                [r HLEN hash1] eq 2 && [r HLEN hash2] eq 1 &&
+                [r HLEN hash3] eq 0 && [r HLEN hash4] eq 2 && [r HLEN hash5] eq 3 &&
+                [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}] eq 7
+            } else {
+                fail "Fields should expire across multiple keys"
+            }
+            
+            assert_equal "{} v2_1 v3_1" [r HMGET hash1 f1 f2 f3]
+            assert_equal "{} {} v3_2" [r HMGET hash2 f1 f2 f3]
+            assert_equal 0 [r EXISTS hash3]
+            assert_equal "v1_4 {} v3_4" [r HMGET hash4 f1 f2 f3]
+            assert_equal "v1_5 v2_5 v3_5" [r HMGET hash5 f1 f2 f3]
+            assert_match {4} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
+    }
+}
+foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+    start_server {tags {"hashexpire external:skip"}} {
+        test "$command handles mixed short and long expiry times across multiple keys" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            r HSET key1 f1 v1 f2 v2 f3 v3
+            r HSET key2 f1 v1 f2 v2 f3 v3
+            r HSET key3 f1 v1 f2 v2 f3 v3
+            r HSET key4 f1 v1 f2 v2 f3 v3
+            assert_match {4} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            
+            set long_expire [expr {
+                $command eq "HEXPIRE" ? 1000000000 :
+                $command eq "HPEXPIRE" ? 1000000000 :
+                $command eq "HEXPIREAT" ? [clock seconds] + 1000000000 :
+                [clock milliseconds] + 1000000000
+            }]
+            r $command key2 $long_expire FIELDS 1 f1
+
+            set short_expire [get_short_expire_value $command]
+            r $command key1 $short_expire FIELDS 1 f1
+            r $command key3 $short_expire FIELDS 2 f1 f2
+            r $command key4 $short_expire FIELDS 3 f1 f2 f3
+            
+            wait_for_condition 100 100 {
+                [r HLEN key1] eq 2 && [r HLEN key2] eq 3 && [r HLEN key3] eq 1 &&
+                [r HLEN key4] eq 0 && [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}] eq 6
+            } else {
+                fail "Short expiry fields should expire"
+            }
+            
+            assert_equal "{} v2 v3" [r HMGET key1 f1 f2 f3]
+            assert_equal "v1 v2 v3" [r HMGET key2 f1 f2 f3]
+            assert_equal "{} {} v3" [r HMGET key3 f1 f2 f3]
+            assert_equal 0 [r EXISTS key4]
+            assert_match {3} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            
+            assert_morethan [r HTTL key2 FIELDS 1 f1] 3000
+        }
+    }
+}
+foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+    start_server {tags {"hashexpire external:skip"}} {
+
+        test "$command deletes entire keys when all fields expire while preserving partial keys" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            # Create keys where some will be completely deleted
+            for {set i 1} {$i <= 4} {incr i} {
+                r HSET delkey$i f1 v1
+            }
+            r HSET keepkey f1 v1 f2 v2
+            
+            # Set expiry on f1 field in delkey1-4 (which is all the fields there)
+            for {set i 1} {$i <= 4} {incr i} {
+                r $command delkey$i [get_short_expire_value $command] FIELDS 1 f1
+            }
+            r $command keepkey [get_short_expire_value $command] FIELDS 1 f1
+            
+            # Wait for active expiry - 4 keys deleted, 1 key reduced
+            wait_for_condition 100 100 {
+                [r EXISTS delkey1] eq 0 && [r EXISTS delkey2] eq 0 &&
+                [r EXISTS delkey3] eq 0 && [r EXISTS delkey4] eq 0 &&
+                [r HLEN keepkey] eq 1 &&
+                [info_field [r info stats] expired_subkeys] eq [expr {$initial_expired + 5}]
+            } else {
+                fail "Keys should be deleted when last field expires"
+            }
+            
+            assert_equal "{} v2" [r HMGET keepkey f1 f2]
+        }
+    }
+}
+
+foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+    start_server {tags {"hashexpire external:skip"}} {
+        test "$command active expiry reclaims memory efficiently across multiple large hash keys" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            
+            # Create keys with large values
+            set large_value [string repeat "x" 1024]
+            # 5 keys, 10 "large" fields in each
+            for {set i 1} {$i <= 5} {incr i} {
+                for {set j 1} {$j <= 10} {incr j} {
+                    r HSET myhash$i f$j $large_value$i$j
+                }
+            }
+            
+            # Save initial memory
+            set total_mem_before 0
+            for {set i 1} {$i <= 5} {incr i} {
+                set mem [r MEMORY USAGE myhash$i]
+                if {$mem eq ""} {set mem 0}
+                incr total_mem_before $mem
+            }
+            
+            # For each key, set expire for 5 fields
+            for {set i 1} {$i <= 5} {incr i} {
+                r $command myhash$i [get_short_expire_value $command] FIELDS 5 f1 f2 f3 f4 f5
+            }
+            
+            # Wait for expiry
+            wait_for_condition 100 100 {
+                [r HLEN myhash1] eq 5 && [r HLEN myhash2] eq 5 && 
+                [r HLEN myhash3] eq 5 && [r HLEN myhash4] eq 5 &&
+                [r HLEN myhash5] eq 5 &&
+                [info_field [r info stats] expired_subkeys] eq [expr {$initial_expired + 25}]
+            } else {
+                fail "25 fields should expire across 5 keys"
+            }
+            
+            # Verify memory reduction
+            set total_mem_after 0
+            for {set i 1} {$i <= 5} {incr i} {
+                set mem [r MEMORY USAGE myhash$i]
+                if {$mem eq ""} {set mem 0}
+                incr total_mem_after $mem
+            }
+            
+            # Memory should be reduced
+            if {$total_mem_before > 0} {
+                assert_morethan [expr {$total_mem_before - $total_mem_after}] 10000
+            }
+        }
+    }
+}
+
+##### HINCRBY/HINCRBYFLOAT Active Expiry Tests #####
+start_server {tags {"hashexpire external:skip"}} {
+    foreach cmd {HINCRBY HINCRBYFLOAT} {
+        # Set increment values
+        if {$cmd eq "HINCRBY"} {
+            set inc1 2
+            set inc2 3
+            set inc3 4
+        } else {
+            set inc1 2.5
+            set inc2 3.5
+            set inc3 4.5
+        }
+
+        # 1 key, 1 field
+        test "$cmd recreates field with correct value after active expiry deletion" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 1
+            assert_equal 1 [r HLEN myhash]
+
+            # Set expiry on f1
+            r HPEXPIRE myhash 100 FIELDS 1 f1
+
+            # Wait for active expiry
+            wait_for_active_expiry r myhash 0 $initial_expired 1
+
+            # Try increment after expiry (should recreate field)
+            r $cmd myhash f1 $inc1
+            assert_equal $inc1 [r HGET myhash f1]
+        }
+
+        # 1 key, 1 field, increment before expiry
+        test "$cmd preserves existing TTL when incrementing field value" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 1
+            assert_equal 1 [r HLEN myhash]
+
+            # Set expiry after increment
+            r HEXPIRE myhash 100000 FIELDS 1 f1
+
+            # Increment after expiry set
+            r $cmd myhash f1 $inc1
+
+            # Check value and expiry is still set
+            assert_equal [expr {$inc1 + 1}] [r HGET myhash f1]
+            assert_morethan [r HTTL myhash FIELDS 1 f1] 90000
+        }
+
+        # 1 key, 3 fields, increment multiple fields, expiry on multiple fields
+        test "$cmd handles mix of expired and existing fields during increment operations" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 1 f2 2 f3 3
+            assert_equal 3 [r HLEN myhash]
+
+            # Set expiry on f1 and f3
+            r HPEXPIRE myhash 100 FIELDS 2 f1 f3
+
+            # Wait for active expiry
+            wait_for_active_expiry r myhash 1 $initial_expired 2
+
+            # Increment all fields (f1 and f3 should be recreated, f2 should increment)
+            r $cmd myhash f1 $inc1
+            r $cmd myhash f2 $inc2
+            r $cmd myhash f3 $inc3
+
+            # Check values
+            assert_equal "$inc1 [expr {$inc2+2}] $inc3" [r HMGET myhash f1 f2 f3]
+        }
+
+        # 1 key, 3 fields, increment before expiry, then expire
+        test "$cmd maintains TTL values when incrementing fields with existing expiry" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+
+            r HSET myhash f1 1 f2 2 f3 3
+            assert_equal 3 [r HLEN myhash]
+
+            # Set expiry on f1 and f3
+            r HEXPIRE myhash 100000 FIELDS 2 f1 f3
+
+            # Increment/ Decrement all fields
+            r $cmd myhash f1 $inc1
+            r $cmd myhash f3 -$inc3
+            # Only f2 should remain
+            assert_equal "[expr {$inc1+1}] 2 [expr {-$inc3+3}]" [r HMGET myhash f1 f2 f3]
+        }
+    }
+}
+
+### HDEL WITH ACTIVE EXPIRE #####
+start_server {tags {"hashexpire external:skip"}} {
+    test {HDEL removes both expired and non-expired fields deleting key when empty} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        r HSET myhash f1 v1 f2 v2
+        r HEXPIRE myhash 1 FIELDS 1 f1
+        wait_for_active_expiry r myhash 1 $initial_expired 1
+        # f1 is expired, f2 is not, f3 does not exist
+        r HDEL myhash f1 f2 f3
+        # f1 and f2 should be gone, f3 never existed
+        assert_equal 0 [r HEXISTS myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+        assert_equal 0 [r HEXISTS myhash f3]
+        # The key should be deleted since all fields are gone
+        assert_equal 0 [r EXISTS myhash]
+    }
+}
+
+##### HPERSIST TEST WITH ACTIVE EXPIRY #####
+start_server {tags {"hashexpire external:skip"}} {
+    test {HPERSIST returns -2 when attempting to persist already expired field} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        r HSET myhash f1 v1
+        r HPEXPIRE myhash 50 FIELDS 1 f1
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        assert_equal -2 [r HPERSIST myhash FIELDS 1 f1]
+        assert_equal -2 [r HTTL myhash FIELDS 1 f1]
+        assert_equal "" [r HGET myhash f1]
+    }
+
+    test {HPEXPIRE works correctly on field after HPERSIST removes its TTL} {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        r HSET myhash f1 v1
+        r HEXPIRE myhash 10000 FIELDS 1 f1
+        r HPERSIST myhash FIELDS 1 f1
+        r HPEXPIRE myhash 150 FIELDS 1 f1
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        assert_equal 0 [r EXISTS myhash]
     }
 }
