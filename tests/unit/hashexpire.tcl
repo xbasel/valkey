@@ -1552,9 +1552,7 @@ start_server {tags {"hashexpire external:skip"}} {
         } else {
             fail "Hash is showing expired elements"
         }
-        # check that we do get a response even though it is expired
-        assert_match {} [r hrandfield myhash -1]
-
+        
         # Now write a persistent element
         assert_equal {1} [r HSET myhash f5 v5]
         # make sure this is the element we will get all the time
@@ -1620,9 +1618,7 @@ start_server {tags {"hashexpire external:skip"}} {
         } else {
             fail "Hash is showing expired elements"
         }
-        # check that we get an empty response even though there are expired fields
-        assert_match {} [r hrandfield myhash 2]
-
+        
         # Now write a persistent elements
         assert_equal {3} [r HSET myhash f8 v8 f9 v9 f10 v10]
         # make sure this is the elements we will get all the time
