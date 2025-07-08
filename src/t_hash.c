@@ -1187,12 +1187,6 @@ void hsetexCommand(client *c) {
     if (checkType(c, o, OBJ_HASH))
         return;
 
-    /* Check for object existence condition */
-    if ((flags & ARGS_SET_NX && o) || (flags & ARGS_SET_XX && !o)) {
-        addReply(c, shared.czero);
-        return;
-    }
-
     if (o == NULL) {
         o = createHashObject();
         dbAdd(c->db, c->argv[1], &o);
