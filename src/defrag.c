@@ -466,18 +466,6 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
     }
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore* kvsore) {
-    serverDb *db = server.db[dbid];
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
-    objectDbContext ctx = {db, ob};
-    if (kvsore == db->keys_with_volatile_items) {
-        // handle
-    } else {
-        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    }
-}
-
 static void defragQuicklist(robj *ob) {
     quicklist *ql = ob->ptr, *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
@@ -554,6 +542,19 @@ static int defragRaxNode(raxNode **noderef) {
         return 1;
     }
     return 0;
+}
+
+static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore* kvsore) {
+    serverDb *db = server.db[dbid];
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    hashtable *ht = ob->ptr;
+    objectDbContext ctx = {db, ob};
+    if (kvsore == db->keys_with_volatile_items) {
+        vset* vset = hashTypeGetVolatileSet(ob);
+        *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
+    } else {
+        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    }
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -802,12 +803,14 @@ static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
     UNUSED(ctx);
 
     // xbasel
-    if (vsetHasRax(vset)) {
+
+    // if (hashtableSize(o->ptr) > server.active_defrag_max_scan_fields) {
+    if (hashtableSize(o->ptr) > 1) {
         defragLater(o);
     } else {
         size_t cursor = 0;
         do {
-            cursor = vsetScanDefrag(vset, cursor, activeDefragAlloc, NULL);
+            cursor = vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);
         } while (cursor != 0);
     }
 }
@@ -894,7 +897,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         robj *ob = found;
 
         long long key_defragged = server.stat_active_defrag_hits;
-        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid) == 1);
+        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid, ctx->kvstate.kvs) == 1);
         if (key_defragged != server.stat_active_defrag_hits) {
             server.stat_active_defrag_key_hits++;
         } else {
@@ -917,24 +920,6 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         }
     }
 
-    return (!defrag_later || listLength(defrag_later) == 0) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
-}
-
-static doneStatus defragVolaSetLaterStep(monotime endtime, void *privdata) {
-    defragKeysCtx *ctx = privdata;
-    // serverAssert(ctx->kvstate.kvs == server.db[ctx->dbid]->keys_with_volatile_items); // ctx isn't provided its null
-
-    while (defrag_later && listLength(defrag_later) > 0) {
-        listNode *head = listFirst(defrag_later);
-        head->value
-        vset *vset = head->value;
-        do {
-            defrag_later_cursor = vsetScanDefrag(vset, defrag_later_cursor, activeDefragAlloc, defragRaxNode);
-        } while (defrag_later_cursor && getMonotonicUs() < endtime);
-        if (defrag_later_cursor == 0) {
-            listDelNode(defrag_later, head);
-        }
-    }
     return (!defrag_later || listLength(defrag_later) == 0) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
 }
 
@@ -1040,8 +1025,10 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
+    static defragKeysCtx ctx; // STATIC - this persists
+    ctx.dbid = dbid; // TODO xbasel is this even needed?
     return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
-                                    dbKeysWithVolatileItemsScanCallback, defragVolaSetLaterStep, privdata);
+                                    dbKeysWithVolatileItemsScanCallback, defragLaterStep, &ctx);
 }
 
 
