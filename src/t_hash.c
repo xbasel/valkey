@@ -2051,6 +2051,9 @@ static void propagateFieldsDeletion(serverDb *db, robj **argv, int argc) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    robj* keyobj = argv[1];
+    notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+
     // TODO xbasel check keyspace notification
     server.replication_allowed = prev_replication_allowed;
 }
@@ -2168,6 +2171,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
         robj *keyobj = argv[1]; // keyobj from buildExpireFieldsArgv
         dbDelete(db, keyobj);
         propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
         signalModifiedKey(NULL, db, keyobj);
     } else {
         propagateFieldsDeletion(ctx.db, argv, argc);
