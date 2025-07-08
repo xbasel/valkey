@@ -2074,6 +2074,7 @@ static int expireEntry(void *entry, void *c) {
     if (deleted) {
         debugLogField(o, entry_ptr);
         ctxAddEntry(ctx, entry_ptr);
+        server.stat_expiredfields++;
         return 1;
     }
     return 0;
