@@ -1626,7 +1626,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         result = -2;
         if (set_expired) {
             if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
-                /* In case we deleted the field, add it to the ew hdel command vector. */
+                /* In case we deleted the field, add it to the new hdel command vector. */
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
                 result = 2;
