@@ -843,7 +843,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
             hashtableFairRandomEntry(hashobj->ptr, &e);
             if (entryIsExpired(e) && --maxtries) {
                 long long entry_expired_time = entryGetExpiry(e);
-                /* in case we will not be able to locate an entry which is not expired, we ends up returning
+                /* in case we will not be able to locate an entry which is not expired, we endsup returning
                  * an expired entry. this is somewhat aligned with the way generic keys are handled.
                  * We would, however try and use the entry with the latest expiration time. */
                 if (!max_expired_entry || max_expired_time < entry_expired_time) {
