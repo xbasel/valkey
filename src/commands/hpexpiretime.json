@@ -40,7 +40,7 @@
             "items": {
                 "oneOf": [
                     {
-                        "description": "Field does not exist in the provided hash key, or the hash key is empty",
+                        "description": "Field does not exist in the provided hash key, or the hash key is empty.",
                         "const": -2
                     },
                     {

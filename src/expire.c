@@ -828,7 +828,7 @@ bool timestampIsExpired(mstime_t when) {
     return now > when;
 }
 
-/* This function verify if the current conditions allow expiration of keys and fields.
+/* This function verifies if the current conditions allow expiration of keys and fields.
  * For some cases expiration is not allowed, but we would still like to ignore the key
  * so to treat it as "expired" without actively deleting it. */
 expirationPolicy getExpirationPolicyWithFlags(int flags) {
