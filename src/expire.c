@@ -292,11 +292,6 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
     int dbs_performed = 0;
     long long start = ustime(), elapsed;
 
-    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
-     * Typically, at the end of the pause we will properly expire the key OR we
-     * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return;
-
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
          * for time limit, unless the percentage of estimated stale keys is
@@ -513,6 +508,11 @@ typedef void expiryDriver(int type, unsigned long entries_per_loop, long long ti
  * as it is not scheduled to run in the fast cycle.
  */
 void activeExpireCycle(int type) {
+    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
+     * Typically, at the end of the pause we will properly expire the key OR we
+     * will have failed over and the new primary will send us the expire. */
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return;
+
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
