@@ -835,27 +835,20 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
  * 'val' can be NULL in which case it's not extracted. */
 static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
-        void *e = NULL, *max_expired_entry = NULL;
-        long long max_expired_time = EXPIRY_NONE;
+        void *e = NULL;
         int maxtries = 100;
         hashTypeIgnoreTTL(hashobj, true);
         while (!e) {
             hashtableFairRandomEntry(hashobj->ptr, &e);
             if (entryIsExpired(e) && --maxtries) {
-                long long entry_expired_time = entryGetExpiry(e);
-                /* in case we will not be able to locate an entry which is not expired, we end up returning
-                 * an expired entry. this is somewhat aligned with the way generic keys are handled.
-                 * We would, however try and use the entry with the latest expiration time. */
-                if (!max_expired_entry || max_expired_time < entry_expired_time) {
-                    max_expired_entry = e;
-                    max_expired_time = entry_expired_time;
-                }
                 e = NULL;
                 continue;
             } else if (maxtries == 0) {
-                /* we exhausted all attempts to locate non-expired entry.
-                 * We thus use the best one we found. */
-                e = max_expired_entry;
+                /* in case we will not be able to locate an entry which is not expired, we will just not return any
+                 * result. An alternative would have been that we end up returning an expired entry. */
+                field->sval = NULL;
+                if (val) val->sval = NULL;
+                break;
             }
             sds sds_field = entryGetField(e);
             field->sval = (unsigned char *)sds_field;
