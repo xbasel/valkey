@@ -1635,7 +1635,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     /* Used to track hash objects with expiry attached to its fields */
-    bool has_vola = hashTypeHasVolatileElements(obj);
+    bool has_vola = obj && hashTypeHasVolatileElements(obj);
 
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
@@ -1751,7 +1751,7 @@ void hpersistCommand(client *c) {
         return;
 
     /* Remember current volatile state to detect changes after modification. */
-    bool has_vola = hashTypeHasVolatileElements(hash);
+    bool has_vola = hash && hashTypeHasVolatileElements(hash);
 
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);

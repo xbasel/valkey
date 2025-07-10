@@ -483,11 +483,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
-        /* If deleting a hash object, untrack the object if it contains volatile items. */
-        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val)) {
+        /* If deleting a hash object, untrack the object if needed. */
+        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
             dbUntrackKeyWithVolaItems(db, val); // TODO xbasel, dbUntrackKeyWithVolaItems should accept optional dict_index (it's available here).
-        } else {
-            debugServerAssert(0 == dbUntrackKeyWithVolaItems(db, val));
         }
 
         if (async) {
