@@ -127,6 +127,7 @@ long long entryGetExpiry(const entry *entry) {
 entry *entrySetExpiry(entry *e, long long expiry) {
     if (entryHasExpiry(e)) {
         char *buf = sdsAllocPtr(e);
+        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned */
         if (entryHasValuePtr(e)) buf -= sizeof(sds);
         buf -= sizeof(expiry);
         memcpy(buf, &expiry, sizeof(expiry));

@@ -69,7 +69,7 @@ bool hashTypeHasVolatileElements(robj *o) {
 
 /* make any access to the hash object elements ignore the specific elements expiration.
  * This is mainly in order to be able to access hash elements which are already expired. */
-void hashTypeIgnoreTTL(robj *o, bool ignore) {
+static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && !hashTypeHasVolatileElements(o)) {

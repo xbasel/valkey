@@ -5,7 +5,7 @@ proc info_field {info field} {
             return [string trim [lindex [split $line ":"] 1]]
         }
     }
-    return ""
+    return [s field_name]
 }
 
 proc assert_keyevent_pattern {rd event_type key} {
@@ -13,7 +13,7 @@ proc assert_keyevent_pattern {rd event_type key} {
     assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
 }
 
-start_server {tags {"hashexpire external:skip"}} {
+start_server {tags {"hashexpire"}} {
     ####### Valid scenarios tests #######
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command expiry" {
@@ -257,19 +257,17 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ####### Invalid scenarios tests #######
-        test {HGETEX EX- multiple options used (EX + PX)} {
+    test {HGETEX EX- multiple options used (EX + PX)} {
         r FLUSHALL
         r HSET myhash f1 v1
-        catch {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1} e
-        set e
-    } {ERR *}
+        assert_error "ERR*" {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1}
+    }
     
     test {HGETEX EXAT- multiple options used (EXAT + PXAT)} {
         r FLUSHALL
         r HSET myhash f1 v1
-        catch {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1} e
-        set e
-    } {ERR *}
+        assert_error "ERR*" {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1}
+    }
     
     # Common error scenarios for all commands
     foreach {cmd ttl_val} [list \
@@ -349,7 +347,7 @@ start_server {tags {"hashexpire external:skip"}} {
 }
 
 ## HGETEX -> Keyspace notification tests ####
-start_server {tags {"hashexpire external:skip"}} {
+start_server {tags {"hashexpire"}} {
     if {$::singledb} {
         set db 0
     } else {
@@ -547,7 +545,7 @@ start_server {tags {"hashexpire external:skip"}} {
 }
 
 # HSETEX ####
-start_server {tags {"hashexpire external:skip"}} {    
+start_server {tags {"hashexpire"}} {    
     test {HSETEX KEEPTTL - preserves existing TTL of field} {
         r FLUSHALL
 
@@ -1634,7 +1632,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
 
 ####### Test info
-start_server {tags {"hash-ttl-info external:skip"}} {    
+start_server {tags {"hash-ttl-info"}} {    
     test {Hash ttl - check command stats} {
         r FLUSHALL
 
