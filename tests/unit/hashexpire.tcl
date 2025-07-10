@@ -1632,7 +1632,7 @@ start_server {tags {"hashexpire"}} {
 
 
 ####### Test info
-start_server {tags {"hash-ttl-info"}} {    
+start_server {tags {"hash-ttl-info external:skip"}} {    
     test {Hash ttl - check command stats} {
         r FLUSHALL
 
