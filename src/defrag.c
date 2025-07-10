@@ -458,8 +458,7 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
         /* In case the entry is tracked we need to update it in the volatile set */
         if (entryHasExpiry(new_entry)) {
             objectDbContext *ctx = privdata;
-            serverAssert(ctx->o);
-            serverAssert(ctx->db);
+            serverAssert(ctx && ctx->db && ctx->o);
             hashTypeTrackUpdateEntry(ctx->db, ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;

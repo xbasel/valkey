@@ -153,6 +153,16 @@ void expireScanCallback(void *privdata, void *entry) {
 
 int hashTypeExpireEntry(void *db, void *o, void *entry);
 
+/* Callback used during kvstore scan to select a hash key with field-level TTLs.
+ *
+ * This is the second level of the active expiry iteration:
+ *   - Level 1: DB-level scan over keys with volatile fields
+ *   - Level 2: This function, saves the current key for processing
+ *   - Level 3: Entry-level iteration in activeExpireFieldProcessKey()
+ *
+ * This is only called after the previous key was fully processed.
+ * It sets up the next key to be processed over one or more expiry cycles.
+ */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
     activeExpireFieldIterator *iter = privdata;
     serverAssert(volaKey);
@@ -174,6 +184,13 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
+/* Check if the active expire loop has reached its time limit.
+ *
+ * This is called repeatedly during field-level expiration. To reduce
+ * the cost of frequent time sampling, we update `now_us` only once
+ * every 16 iterations. Returns true if the elapsed time since `start_us`
+ * exceeds `limit_us`.
+ */
 static inline int activeExpireFieldsCheckTimeLimitReached(
     unsigned int *iterations,
     uint64_t start_us,
@@ -185,8 +202,13 @@ static inline int activeExpireFieldsCheckTimeLimitReached(
     return (*now_us - start_us >= limit_us);
 }
 
+/* Advance to the next DB in the active expire field iterator.
+ *
+ * If the last DB was reached, wrap around to DB 0 and reset the scan cursor.
+ * Also clears the current key to start fresh in the next cycle.
+ */
 
-void advanceDb(activeExpireFieldIterator *it) {
+static inline void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
@@ -195,11 +217,22 @@ void advanceDb(activeExpireFieldIterator *it) {
     it->current_key = NULL;
 }
 
-static inline int effort(void) {
+/* Returns the zero-based active expire effort level.
+ *
+ * Internally we use a 0-based effort level (0–9), while the server config
+ * exposes it as 1–10. This helper normalizes it for internal use.
+ */
+static inline int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
 }
 
-void hashKeyDone(activeExpireFieldIterator *it) {
+/* Marks the current key as fully processed for field-level expiration.
+ *
+ * This is called after all volatile items (e.g., expiring hash fields)
+ * within the current key have been processed. It releases the key by
+ * decrementing its refcount and clears the iterator state.
+ */
+static inline void activeExpireKeyItemsDone(activeExpireFieldIterator *it) {
     serverAssert(it->current_key);
     serverAssert(it->current_key->refcount >= 1);
     decrRefCount(it->current_key);
@@ -246,7 +279,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
                 it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
                                             isExpiryTableValidForSamplingCb, it);
             } else if (it->current_key->refcount == 1) {
-                hashKeyDone(it);
+                activeExpireKeyItemsDone(it);
             }
 
             if (it->current_key) {
@@ -254,7 +287,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
                                                              entries_per_call);
                 entries_processed += expired;
                 if (!hashTypeHasVolatileElements(it->current_key) || expired < entries_per_call) {
-                    hashKeyDone(it);
+                    activeExpireKeyItemsDone(it);
                 }
             }
 
@@ -278,8 +311,8 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
      * is 10. */
 
     unsigned long config_cycle_fast_duration =
-        ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * effort();
-    unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - effort();
+        ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
+    unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - activeExpireEffort();
 
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
@@ -517,8 +550,8 @@ void activeExpireCycle(int type) {
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
     unsigned long config_keys_per_loop =
-        ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort();
-    unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * effort();
+        ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * activeExpireEffort();
+    unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
 
 
     static int expireCycleStartWithFields = 0;
