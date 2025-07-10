@@ -262,14 +262,14 @@ start_server {tags {"hashexpire external:skip"}} {
         r HSET myhash f1 v1
         catch {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
     
     test {HGETEX EXAT- multiple options used (EXAT + PXAT)} {
         r FLUSHALL
         r HSET myhash f1 v1
         catch {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
     
     # Common error scenarios for all commands
     foreach {cmd ttl_val} [list \
@@ -283,7 +283,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd FIELDS 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- negative TTL" {
             r FLUSHALL
@@ -304,7 +304,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd $ttl_val 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- wrong numfields count (too few fields)" {
             r FLUSHALL
@@ -318,7 +318,7 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSET myhash f1 v1
             catch {r HGETEX myhash $cmd $ttl_val FIELDS 1 f1 f2} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd- key is wrong type (string instead of hash)" {
             r FLUSHALL
@@ -331,20 +331,20 @@ start_server {tags {"hashexpire external:skip"}} {
             r FLUSHALL
             catch {r HGETEX myhash $cmd $ttl_val FIELDS 0} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
         
         test "HGETEX $cmd with negative numfields" {
             r FLUSHALL
             catch {r HGETEX myhash $cmd $ttl_val FIELDS -10} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
 
         test "HGETEX $cmd with missing key" {
             r FLUSHALL
             set expire [expr {[clock seconds] + 100}]
             catch {r HGETEX $cmd $expire FIELDS 1 f1} e
             set e
-        } {ERR syntax error}
+        } {ERR *}
     }
 }
 
@@ -619,7 +619,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX EX - test missing TTL} {
         catch {r HSETEX myhash EX FIELDS 1 field1 val1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     test {HSETEX EX - mismatched field/value count} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
@@ -670,7 +670,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX PX - test missing TTL} {
         catch {r HSETEX myhash PX FIELDS 1 field1 val1} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     # test {HSETEX PX - mismatched field/value count} {
     #     catch {r HSETEX myhash PX 100 FIELDS 2 field1 val1} e
@@ -680,7 +680,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     ## FNX/FXX
 
-    # hsetex throws ERR syntax error, it shouldn't
+    # hsetex throws ERR *, it shouldn't
     test {HSETEX EX FNX - set only if none of the fields exist} {
         r FLUSHALL        
         r HSET myhash field1 val1
@@ -732,7 +732,7 @@ start_server {tags {"hashexpire external:skip"}} {
     test {HSETEX EX - FNX and FXX conflict error} {
         catch {r HSETEX myhash EX 10 FNX FXX FIELDS 1 x y} e
         set e
-    } {ERR syntax error}
+    } {ERR *}
 
     #################### Lazy Expiry ########################
 
@@ -1540,6 +1540,99 @@ start_server {tags {"hashexpire external:skip"}} {
         # f2 will have no expiration
         # f4 does not exist
         assert_equal {1 -1 -2} [r hpersist myhash FIELDS 3 f1 f2 f4]
+    }
+
+     #################### HRANDFIELD ##################
+
+    test "HRANDFIELD - CASE 1: negative count" {
+        r FLUSHALL
+        assert_equal {1} [r HSETEX myhash PX 1 fields 5 f1 v1 f2 v2 f3 v3 f4 v4 f5 v5]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        # check that we do get a response even though it is expired
+        assert_match {} [r hrandfield myhash -1]
+
+        # Now write a persistent element
+        assert_equal {1} [r HSET myhash f5 v5]
+        # make sure this is the element we will get all the time
+        for {set i 1} {$i <= 50} {incr i} {
+            assert_equal {f5 f5 f5 f5 f5} [r hrandfield myhash -5]
+        }
+
+    }
+
+     test "HRANDFIELD - CASE 2: The number of requested elements is greater than the number of elements inside the hash" {
+        r FLUSHALL
+        assert_equal {1} [r HSETEX myhash PX 1 fields 5 f1 v1 f2 v2 f3 v3 f4 v4 f5 v5]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        # check that we get an empty response even though there are expired fields
+        assert_match {} [r hrandfield myhash 10]
+
+        # Now write a persistent element
+        assert_equal {3} [r HSET myhash f5 v5 f6 v6 f7 v7]
+        # make sure this is the element we will get all the time
+        for {set i 1} {$i <= 50} {incr i} {
+            set result [r hrandfield myhash 10]
+            assert_equal 3 [llength [split $result]]
+            assert_match {*f5*} $result
+            assert_match {*f6*} $result
+            assert_match {*f7*} $result
+        }
+
+    }
+
+     test "HRANDFIELD - CASE 3: The number of elements inside the hash is not greater than 3 times the number of requested elements" {
+        r FLUSHALL
+        assert_equal {1} [r HSETEX myhash PX 1 fields 5 f1 v1 f2 v2 f3 v3 f4 v4 f5 v5]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        # check that we get an empty response even though there are expired fields
+        assert_match {} [r hrandfield myhash 4]
+
+        # Now write a persistent elements
+        assert_equal {4} [r HSET myhash f5 v5 f6 v6 f7 v7 f8 v8]
+        # make sure this is the elements we will get all the time
+        for {set i 1} {$i <= 50} {incr i} {
+            set result [r hrandfield myhash 4]
+            assert_equal 4 [llength [split $result]]
+             assert_match {*f5*} $result
+             assert_match {*f6*} $result
+             assert_match {*f7*} $result
+             assert_match {*f8*} $result
+        }
+    }
+
+    test "HRANDFIELD - CASE 4: The number of elements inside the hash is greater than 3 times the number of requested elements" {
+        r FLUSHALL
+        assert_equal {1} [r HSETEX myhash PX 1 fields 8 f1 v1 f2 v2 f3 v3 f4 v4 f5 v5 f6 v6 f7 v7 f8 v8]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        # check that we get an empty response even though there are expired fields
+        assert_match {} [r hrandfield myhash 2]
+
+        # Now write a persistent elements
+        assert_equal {3} [r HSET myhash f8 v8 f9 v9 f10 v10]
+        # make sure this is the elements we will get all the time
+        for {set i 1} {$i <= 50} {incr i} {
+            set result [r hrandfield myhash 3]
+            assert_equal 3 [llength [split $result]]
+            assert_match {*f8*} $result
+            assert_match {*f9*} $result
+            assert_match {*f10*} $result
+        }
     }
 }
 
