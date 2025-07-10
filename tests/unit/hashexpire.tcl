@@ -1392,7 +1392,7 @@ start_server {tags {"hashexpire"}} {
 
         # Re-enable active expiry
         r DEBUG SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {HSCAN skips expired fields} {
         r FLUSHALL
@@ -1425,7 +1425,7 @@ start_server {tags {"hashexpire"}} {
 
         # Re-enable active expiry for future tests
         r DEBUG SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {MOVE preserves field TTLs} {
         r FLUSHALL
@@ -1476,7 +1476,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal 1 [r HLEN myhash]
 
         r debug SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {HINCRBY - on expired field} {
         r FLUSHALL
@@ -1518,7 +1518,7 @@ start_server {tags {"hashexpire"}} {
         # verify the field has TTL
         assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
         r debug SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {HINCRBYFLOAT - on expired field} {
         r FLUSHALL
@@ -1560,7 +1560,7 @@ start_server {tags {"hashexpire"}} {
         # verify the field has TTL
         assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
         r debug SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {HSET - overwrite unexpired field removes TTL} {
         r FLUSHALL
@@ -1587,7 +1587,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal newval [r HGET myhash field1]
 
         r debug SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {HDEL - expired field is removed without triggering expiry logic} {
         r FLUSHALL
@@ -1625,7 +1625,7 @@ start_server {tags {"hashexpire"}} {
         # Verify that no expiry occurred internally
         assert_equal $before $after
         r debug SET-ACTIVE-EXPIRE yes
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 }
 
 ####### Test info
