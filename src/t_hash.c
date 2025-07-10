@@ -52,7 +52,7 @@ vset *hashTypeGetVolatileSet(robj *o) {
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
-    serverAssert(hashTypeGetVolatileSet(o));
+    serverAssert(o->type == OBJ_HASH);
     return ((o->encoding == OBJ_ENCODING_HASHTABLE) && !vsetIsEmpty(hashTypeGetVolatileSet(o)));
 }
 
