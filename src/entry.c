@@ -115,7 +115,9 @@ long long entryGetExpiry(const entry *entry) {
     long long expiry = EXPIRY_NONE;
     if (entryHasExpiry(entry)) {
         char *buf = sdsAllocPtr(entry);
-        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned */
+        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
+                                                           * This is needed since we access the expiry as with pointer casting
+                                                           * which require the access to be 8 bytes aligned. */
         if (entryHasValuePtr(entry)) buf -= sizeof(sds);
         buf -= sizeof(long long);
         expiry = *(long long *)buf;
@@ -127,9 +129,12 @@ long long entryGetExpiry(const entry *entry) {
 entry *entrySetExpiry(entry *e, long long expiry) {
     if (entryHasExpiry(e)) {
         char *buf = sdsAllocPtr(e);
+        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
+                                                           * This is needed since we access the expiry as with pointer casting
+                                                           * which require the access to be 8 bytes aligned. */
         if (entryHasValuePtr(e)) buf -= sizeof(sds);
         buf -= sizeof(expiry);
-        memcpy(buf, &expiry, sizeof(expiry));
+        *(long long *)buf = expiry;
         return e;
     }
     entry *new_entry = entryUpdate(e, NULL, expiry);
