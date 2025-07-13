@@ -548,7 +548,7 @@ static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore* kv
     serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    objectDbContext ctx = {db, ob};
+    defragObjectCtx ctx = {db, ob};
     if (kvsore == db->keys_with_volatile_items) {
         vset* vset = hashTypeGetVolatileSet(ob);
         *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
