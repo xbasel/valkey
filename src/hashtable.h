@@ -43,11 +43,6 @@ typedef uint64_t hashtableIterator[5];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
 
-typedef enum {
-    ENTRY_VALID = 0,
-    ENTRY_INVALID
-} hashtableEntryValidationState;
-
 /* --- Non-opaque types --- */
 
 /* The hashtableType is a set of callbacks for a hashtable. All callbacks are
