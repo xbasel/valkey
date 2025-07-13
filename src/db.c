@@ -1811,7 +1811,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
-    bool updateHashExpiryKvsgtore = val->type==OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
+    bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
     if (updateHashExpiryKvsgtore) {
         dbUntrackKeyWithVolaItems(db, val);
     }

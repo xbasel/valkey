@@ -1290,7 +1290,7 @@ void hsetexCommand(client *c) {
         if (hashTypeLength(o) == 0) {
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        }else {
+        } else {
             updateVolatileTrackingIfNeeded(c->db, o, has_vola);
         }
         server.dirty += changes;
@@ -1466,7 +1466,7 @@ void hgetexCommand(client *c) {
         if (hashTypeLength(o) == 0) {
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        }else {
+        } else {
             updateVolatileTrackingIfNeeded(c->db, o, has_vola);
         }
     } else {
@@ -1692,7 +1692,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         if (hashTypeLength(obj) == 0) {
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        }else {
+        } else {
             updateVolatileTrackingIfNeeded(c->db, obj, has_vola);
         }
     }
@@ -2108,7 +2108,7 @@ static void propagateFieldsDeletion(serverDb *db, robj **argv, int argc) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
-    robj* keyobj = argv[1];
+    robj *keyobj = argv[1];
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
 
     // TODO xbasel check keyspace notification

@@ -992,7 +992,6 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
 }
 
 
-
 static doneStatus defragStagePubsubKvstore(monotime endtime, void *target, void *privdata) {
     // target is server.pubsub_channels or server.pubsubshard_channels
     getClientChannelsFnWrapper *fnWrapper = privdata;
