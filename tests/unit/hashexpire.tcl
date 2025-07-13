@@ -2911,6 +2911,104 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 }
 
+##### HSETEX Active Expiry Tests #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+
+    foreach command {EX PX EXAT PXAT} {
+        test "HSETEX $command single field expires leaving other fields intact" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            r HSET myhash f2 v2
+            assert_equal 1 [r HLEN myhash]
+            # Use HSETEX to set expiry
+            r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
+            wait_for_active_expiry r myhash 1 $initial_expired 1
+            assert_equal "{} v2" [r HGETEX myhash FIELDS 2 f1 f2]
+        }
+
+        test "HSETEX $command multiple fields expire leaving non-expired fields intact" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            r HSET myhash f2 v2
+            assert_equal 1 [r HLEN myhash]
+            # Set expiry on multiple fields with HSETEX
+            r HSETEX myhash $command [get_short_expire_value $command] FIELDS 2 f1 v1 f3 v3
+            wait_for_active_expiry r myhash 1 $initial_expired 2
+            # Verify only non-expired field remains
+            assert_equal "{} v2 {}" [r HGETEX myhash FIELDS 3 f1 f2 f3]
+        }
+
+        test "HSETEX $command hash key deleted when all fields expire" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
+            wait_for_active_expiry r myhash 0 $initial_expired 1
+            assert_equal 0 [r EXISTS myhash]
+        }
+    }
+
+    test "HPERSIST cancels HSETEX expiry preventing field deletion" {
+        r FLUSHALL
+        r HSET myhash f2 v2
+        assert_equal 1 [r HLEN myhash]
+        # Set short expiry
+        r HSETEX myhash PX 100 FIELDS 1 f1 v1
+        # Immediately persist to prevent expiry
+        r HPERSIST myhash FIELDS 1 f1
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+        # Wait longer than original expiry time
+        after 200
+        # Field should still exist due to PERSIST
+        assert_equal "v1" [r HGET myhash f1]
+        assert_equal 2 [r HLEN myhash]
+    }
+
+    test "HSETEX overwrites existing field expiry with new shorter expiry" {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        r HSET myhash f1 v1
+        assert_equal 1 [r HLEN myhash]
+        # Set initial long expiry
+        r HEXPIRE myhash 10000 FIELDS 1 f1
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 5000
+        # Use HSETEX to set shorter expiry
+        r HSETEX myhash PX 100 FIELDS 1 f1 v1
+        # Wait for active expiry with new shorter time
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        assert_equal 0 [r EXISTS myhash]
+    }
+}
+
+##### HSETEX Active Expiry Keyspace Notifications #####
+start_server {tags {"hashexpire external:skip"}} {
+    r config set notify-keyspace-events KEA
+    foreach command {EX PX EXAT PXAT} {
+        test "HSETEX $command - keyspace notifications fired on field expiry" {
+            r FLUSHALL
+            set initial_expired [info_field [r info stats] expired_subkeys]
+            r HSET myhash f2 v2
+            assert_equal 1 [r HLEN myhash]
+            set rd [setup_single_keyspace_notification r]
+            r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
+            wait_for_active_expiry r myhash 1 $initial_expired 1
+            assert_keyevent_patterns $rd myhash hset hexpire hexpired
+            $rd close
+        }
+    }
+    
+    test "HSETEX - keyspace notifications include del event when hash key removed" {
+        r FLUSHALL
+        set initial_expired [info_field [r info stats] expired_subkeys]
+        set rd [setup_single_keyspace_notification r]
+        r HSETEX myhash PX 100 FIELDS 1 f1 v1
+        wait_for_active_expiry r myhash 0 $initial_expired 1
+        assert_equal 0 [r EXISTS myhash]
+        assert_keyevent_patterns $rd myhash hset hexpire hexpired del
+        $rd close
+    }
+}
+
 ##### Active expiry test with 1 node #####
 start_server {tags {"hashexpire external:skip"}} {
     r config set notify-keyspace-events KEA
