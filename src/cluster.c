@@ -295,6 +295,7 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
+    dbTrackKeyWithVolaItemsIfNeeded(c->db, obj);
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);

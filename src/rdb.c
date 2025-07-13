@@ -2211,9 +2211,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             }
 
             if (rdbtype == RDB_TYPE_HASH_2 && itemexpiry > 0) {
-                // TODO xbasel: We need to add the hashtabele object serverDb->to keys_with_volatile_items
-                // the follow invocation will blow up, because o doesn't have the key yet, its created outside this function , seedbAddRDBLoad
-                // hashTypeTrackEntry(&server.db[dbid], o, entry);
+                hashTypeTrackEntry(o, entry);
             }
         }
 
@@ -3396,6 +3394,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if (expiretime != -1) {
                 val = setExpire(NULL, db, &keyobj, expiretime);
             }
+
+            dbTrackKeyWithVolaItemsIfNeeded(db, val);
 
             /* Set usage information (for eviction). */
             objectSetLRUOrLFU(val, lfu_freq, lru_idle, lru_clock, 1000);

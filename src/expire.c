@@ -165,9 +165,10 @@ int hashTypeExpireEntry(void *db, void *o, void *entry);
  */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
     activeExpireFieldIterator *iter = privdata;
-    serverAssert(volaKey);
-    serverAssert(hashTypeHasVolatileElements(volaKey));
     iter->current_key = volaKey;
+    serverAssert(volaKey && iter->current_key->refcount > 0);
+    serverAssert(hashTypeHasVolatileElements(volaKey));
+
     incrRefCount(iter->current_key);
     assert(hashTypeHasVolatileElements(iter->current_key));
 }

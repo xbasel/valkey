@@ -459,7 +459,8 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
         if (entryHasExpiry(new_entry)) {
             objectDbContext *ctx = privdata;
             serverAssert(ctx && ctx->db && ctx->o);
-            hashTypeTrackUpdateEntry(ctx->db, ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            hashTypeTrackUpdateEntry(ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            dbUntrackKeyWithVolaItems(ctx->db, ctx->o);
         }
         *entry_ref = new_entry;
     }

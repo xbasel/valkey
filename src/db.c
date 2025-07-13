@@ -506,14 +506,25 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
+/**
+ * Checks if the object is a hash object with volatile items and adds it to the hash field expiry kvstore
+ */
+void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(o)) {
+        dbTrackKeyWithVolaItems(db, o);
+    }
+}
+
 /* Add a key with volatile items to the tracking kvstore.  */
 int dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
+    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
 int dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
+    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
@@ -1800,7 +1811,14 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
+    bool updateHashExpiryKvsgtore = val->type==OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
+    if (updateHashExpiryKvsgtore) {
+        dbUntrackKeyWithVolaItems(db, val);
+    }
     robj *newval = objectSetExpire(val, when);
+    if (updateHashExpiryKvsgtore) {
+        dbTrackKeyWithVolaItems(db, newval);
+    }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
         serverAssert(newval == val);

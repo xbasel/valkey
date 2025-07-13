@@ -136,7 +136,7 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
 static inline void debugLogField(robj *key, void *entry) {
     if (server.verbosity <= LL_VERBOSE) {
         sds key2 = objectGetKey(key);
-        serverLog(LL_WARNING, "key %s field %s value %s expired",
+        serverLog(LL_VERBOSE, "key %s field %s value %s expired",
                   key2, entryGetField(entry), entryGetValue(entry));
     }
 }
@@ -2186,8 +2186,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
     serverAssert(max_entries > 0 && max_entries <= 1024);
-
-    serverAssert(o);
+    serverAssert(o && o->refcount >= 2); // this object must be referenced by both active expiry and the db
 
     /* skip TTL checks temporarily (to allow hashtable lookup) */
     hashTypeIgnoreTTL(o, 1);
