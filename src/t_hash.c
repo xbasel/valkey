@@ -134,9 +134,9 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
 }
 
 static inline void debugLogField(robj *key, void *entry) {
-    if (server.verbosity <= LL_VERBOSE) {
+    if (1) {
         sds key2 = objectGetKey(key);
-        serverLog(LL_VERBOSE, "key %s field %s value %s expired",
+        serverLog(LL_WARNING, "key %s field %s value %s expired",
                   key2, entryGetField(entry), entryGetValue(entry));
     }
 }
@@ -2186,7 +2186,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
     serverAssert(max_entries > 0 && max_entries <= 1024);
-    serverAssert(o && o->refcount >= 2); // this object must be referenced by both active expiry and the db
+    serverAssert(o && o->refcount >= 1); // make sure the object is valid
 
     /* skip TTL checks temporarily (to allow hashtable lookup) */
     hashTypeIgnoreTTL(o, 1);
@@ -2226,6 +2226,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     enterExecutionUnit(1, 0);
     if (deleteKey) {
         robj *keyobj = argv[1]; // keyobj from buildExpireFieldsArgv
+        dbUntrackKeyWithVolaItems(db, o);
         dbDelete(db, keyobj);
         propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
         notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
@@ -2234,6 +2235,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     } else {
         propagateFieldsDeletion(ctx.db, argv, argc);
         hashTypeIgnoreTTL(o, 0);
+        if (hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
     }
     exitExecutionUnit();
     postExecutionUnitOperations();

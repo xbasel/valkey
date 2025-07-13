@@ -1614,11 +1614,17 @@ typedef enum childInfoType {
 } childInfoType;
 
 
-typedef struct ActiveExpireFieldIterator {
+typedef struct activeExpireFieldIterator {
     int current_db;
     unsigned long long db_cursor;
-    robj *current_key;
 } activeExpireFieldIterator;
+
+typedef struct activeExpireHashContext {
+    activeExpireFieldIterator *it;
+    mstime_t now;
+    size_t batch_Size;
+    size_t entries_processed;
+} activeExpireHashContext;
 
 
 struct valkeyServer {

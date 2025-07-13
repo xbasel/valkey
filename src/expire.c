@@ -153,24 +153,18 @@ void expireScanCallback(void *privdata, void *entry) {
 
 int hashTypeExpireEntry(void *db, void *o, void *entry);
 
-/* Callback used during kvstore scan to select a hash key with field-level TTLs.
- *
- * This is the second level of the active expiry iteration:
- *   - Level 1: DB-level scan over keys with volatile fields
- *   - Level 2: This function, saves the current key for processing
- *   - Level 3: Entry-level iteration in activeExpireFieldProcessKey()
- *
- * This is only called after the previous key was fully processed.
- * It sets up the next key to be processed over one or more expiry cycles.
+/* Callback used during hash field expiry kvstore scan to process a hash key with volatile fields.
+ * Validates that the key has volatile elements, then processes it for active expiration.
+ * Expires up to ctx->batch_Size fields per call.
+ * Called with each key during the expiration cycle scan.
  */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
-    activeExpireFieldIterator *iter = privdata;
-    iter->current_key = volaKey;
-    serverAssert(volaKey && iter->current_key->refcount > 0);
+    activeExpireHashContext *ctx = privdata;;
+    serverAssert(volaKey);
     serverAssert(hashTypeHasVolatileElements(volaKey));
 
-    incrRefCount(iter->current_key);
-    assert(hashTypeHasVolatileElements(iter->current_key));
+    serverDb *db = server.db[ctx->it->current_db];
+    activeExpireFieldProcessKey(volaKey, db, ctx->now, ctx->batch_Size);
 }
 
 static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
@@ -215,7 +209,6 @@ static inline void advanceDb(activeExpireFieldIterator *it) {
         it->current_db = 0;
         it->db_cursor = 0;
     }
-    it->current_key = NULL;
 }
 
 /* Returns the zero-based active expire effort level.
@@ -225,19 +218,6 @@ static inline void advanceDb(activeExpireFieldIterator *it) {
  */
 static inline int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
-}
-
-/* Marks the current key as fully processed for field-level expiration.
- *
- * This is called after all volatile items (e.g., expiring hash fields)
- * within the current key have been processed. It releases the key by
- * decrementing its refcount and clears the iterator state.
- */
-static inline void activeExpireKeyItemsDone(activeExpireFieldIterator *it) {
-    serverAssert(it->current_key);
-    serverAssert(it->current_key->refcount >= 1);
-    decrRefCount(it->current_key);
-    it->current_key = NULL;
 }
 
 /*
@@ -276,23 +256,18 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         size_t entries_processed = 0;
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
                                                            &iterations, start, time_limit_us, &now)) {
-            if (!it->current_key) {
-                it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
-                                            isExpiryTableValidForSamplingCb, it);
-            } else if (it->current_key->refcount == 1) {
-                activeExpireKeyItemsDone(it);
-            }
+            struct activeExpireHashContext ctx;
+            ctx.it = it;
+            ctx.now = now / 1000; // convert to ms
+            ctx.entries_processed = 0;
+            ctx.batch_Size = entries_per_call;
 
-            if (it->current_key) {
-                size_t expired = activeExpireFieldProcessKey(it->current_key, db, (mstime_t)(now / 1000),
-                                                             entries_per_call);
-                entries_processed += expired;
-                if (!hashTypeHasVolatileElements(it->current_key) || expired < entries_per_call) {
-                    activeExpireKeyItemsDone(it);
-                }
-            }
+            it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
+                                        isExpiryTableValidForSamplingCb, &ctx);
 
-            if (!it->current_key && it->db_cursor == 0) {
+            entries_processed += ctx.entries_processed;
+
+            if (it->db_cursor == 0) {
                 advanceDb(it);
                 dbs_performed++;
                 break;

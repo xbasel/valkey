@@ -1596,7 +1596,7 @@ void copyCommand(client *c) {
     if (expire != -1) newobj = setExpire(c, dst, newkey, expire);
     if (newobj->type == OBJ_HASH && hashTypeHasVolatileElements(newobj)) {
         serverAssert(dbTrackKeyWithVolaItems(c->db, newobj));
-    }
+    } // TODO move this to db add.
 
     /* OK! key copied */
     signalModifiedKey(c, dst, c->argv[2]);
