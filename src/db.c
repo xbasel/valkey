@@ -487,7 +487,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 
         /* If deleting a hash object, untrack it from the volatile set if needed.
          * Note: the volatile set may already be empty if this deletion comes from active expiry. */
-        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val)) {
             dbUntrackKeyWithVolaItems(db, val); // TODO xbasel, dbUntrackKeyWithVolaItems should accept optional dict_index (it's available here).
         }
 

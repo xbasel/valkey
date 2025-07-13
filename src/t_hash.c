@@ -1029,9 +1029,12 @@ void hdelCommand(client *c) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
+                updateVolatileTrackingIfNeeded(c->db, o, has_vola);
                 dbDelete(c->db, c->argv[1]); /* Please note that this will also remove the tracking from the kvstore */
                 keyremoved = 1;
                 break;
+            } else if (!hashTypeHasVolatileElements(o)) {
+                updateVolatileTrackingIfNeeded(c->db, o, has_vola);
             }
         }
     }
@@ -2187,7 +2190,6 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
     serverAssert(max_entries > 0 && max_entries <= 1024);
-    serverAssert(o && o->refcount >= 1); // make sure the object is valid
 
     /* skip TTL checks temporarily (to allow hashtable lookup) */
     hashTypeIgnoreTTL(o, 1);
