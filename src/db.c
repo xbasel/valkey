@@ -217,6 +217,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
+    dbTrackKeyWithVolaItemsIfNeeded(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -1594,9 +1595,6 @@ void copyCommand(client *c) {
 
     dbAdd(dst, newkey, &newobj);
     if (expire != -1) newobj = setExpire(c, dst, newkey, expire);
-    if (newobj->type == OBJ_HASH && hashTypeHasVolatileElements(newobj)) {
-        serverAssert(dbTrackKeyWithVolaItems(c->db, newobj));
-    } // TODO move this to db add.
 
     /* OK! key copied */
     signalModifiedKey(c, dst, c->argv[2]);

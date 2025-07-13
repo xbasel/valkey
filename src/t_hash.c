@@ -2113,7 +2113,6 @@ static void propagateFieldsDeletion(serverDb *db, robj **argv, int argc) {
     robj *keyobj = argv[1];
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
 
-    // TODO xbasel check keyspace notification
     server.replication_allowed = prev_replication_allowed;
 }
 
