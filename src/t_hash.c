@@ -2227,7 +2227,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     enterExecutionUnit(1, 0);
     if (deleteKey) {
         robj *keyobj = argv[1]; // keyobj from buildExpireFieldsArgv
-        dbUntrackKeyWithVolaItems(db, o);
+        // dbUntrackKeyWithVolaItems(db, o);
         dbDelete(db, keyobj);
         propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
         notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);

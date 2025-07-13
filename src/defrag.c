@@ -150,7 +150,7 @@ static_assert(offsetof(defragPubSubCtx, kvstate) == 0, "defragStageKvstoreHelper
 typedef struct {
     serverDb *db;
     robj *o;
-} objectDbContext;
+} defragObjectCtx;
 
 /* When scanning a main kvstore, large elements are queued for later handling rather than
  * causing a large latency spike while processing a hash table bucket.  This list is only used
@@ -457,7 +457,7 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
     if (new_entry) {
         /* In case the entry is tracked we need to update it in the volatile set */
         if (entryHasExpiry(new_entry)) {
-            objectDbContext *ctx = privdata;
+            defragObjectCtx *ctx = privdata;
             serverAssert(ctx && ctx->db && ctx->o);
             hashTypeTrackUpdateEntry(ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
             dbUntrackKeyWithVolaItems(ctx->db, ctx->o);
@@ -470,7 +470,7 @@ static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid) {
     serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    objectDbContext ctx = {db, ob};
+    defragObjectCtx ctx = {db, ob};
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
@@ -516,7 +516,7 @@ static void defragHash(serverDb *db, robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            objectDbContext ctx = {db, ob};
+            defragObjectCtx ctx = {db, ob};
             cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
         } while (cursor != 0);
     }
