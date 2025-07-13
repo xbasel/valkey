@@ -544,13 +544,13 @@ static int defragRaxNode(raxNode **noderef) {
     return 0;
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore* kvsore) {
+static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore *kvsore) {
     serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     defragObjectCtx ctx = {db, ob};
     if (kvsore == db->keys_with_volatile_items) {
-        vset* vset = hashTypeGetVolatileSet(ob);
+        vset *vset = hashTypeGetVolatileSet(ob);
         *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
     } else {
         *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
@@ -792,7 +792,7 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
 }
 
 static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
-    robj *o = *(robj **) elemref;
+    robj *o = *(robj **)elemref;
     serverAssert(o->type == OBJ_HASH);
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     serverAssert(hashTypeHasVolatileElements(o));
@@ -851,7 +851,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
 
 /* returns 0 more work may or may not be needed (see non-zero cursor),
  * and 1 if time is up and more work is needed. */
-static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore* kvstore) {
+static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore *kvstore) {
     if (ob) {
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
@@ -1026,7 +1026,7 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
     static defragKeysCtx ctx; // STATIC - this persists
-    ctx.dbid = dbid; // TODO xbasel is this even needed?
+    ctx.dbid = dbid;          // TODO xbasel is this even needed?
     return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
                                     dbKeysWithVolatileItemsScanCallback, defragLaterStep, &ctx);
 }

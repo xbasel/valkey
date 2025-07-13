@@ -159,7 +159,7 @@ int hashTypeExpireEntry(void *db, void *o, void *entry);
  * Called with each key during the expiration cycle scan.
  */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
-    activeExpireHashContext *ctx = privdata;;
+    activeExpireHashContext *ctx = privdata;
     serverAssert(volaKey);
     serverAssert(hashTypeHasVolatileElements(volaKey));
 
