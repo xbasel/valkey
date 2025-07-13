@@ -518,6 +518,15 @@ void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
     }
 }
 
+/**
+ * Checks if the object is a hash object without volatile items and removes it from the hash field expiry kvstore
+ */
+void dbUnTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && !hashTypeHasVolatileElements(o)) {
+        dbUntrackKeyWithVolaItems(db, o);
+    }
+}
+
 /* Add a key with volatile items to the tracking kvstore.  */
 int dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
     serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);

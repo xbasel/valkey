@@ -708,6 +708,7 @@ static void defragModule(serverDb *db, robj *obj) {
 /* Replace oldptr with newptr in a kvstore slot,
  * typically after reallocation. */
 static inline void replaceReallocatedKvstoreEntry(kvstore *kvs, int slot, robj *oldptr, robj *newptr) {
+    if (oldptr == newptr) return;
     hashtable *ht = kvstoreGetHashtable(kvs, slot);
     int replaced = hashtableReplaceReallocatedEntry(ht, oldptr, newptr);
     serverAssert(replaced);
@@ -723,17 +724,24 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     ob = *elemref;
 
     /* Try to defrag robj and/or string value. */
+    /* Also untrack hash, and track it again with the new reference */
+    bool trackHash = ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(ob);
+    if (trackHash) {
+        dbUntrackKeyWithVolaItems(db, ob);
+    }
     if ((newob = activeDefragStringOb(ob))) {
         *elemref = newob;
         if (objectGetExpire(newob) >= 0) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */
-            replaceReallocatedKvstoreEntry(db->expires, slot, ob, newob);
-        }
-        if (hashTypeHasVolatileElements(newob)) {
-            replaceReallocatedKvstoreEntry(db->keys_with_volatile_items, slot, ob, newob);
+            hashtable *expires_ht = kvstoreGetHashtable(db->expires, slot);
+            int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
+            serverAssert(replaced);
         }
         ob = newob;
+    }
+    if (trackHash) {
+        dbTrackKeyWithVolaItems(db, ob);
     }
 
     if (ob->type == OBJ_STRING) {

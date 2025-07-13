@@ -1469,6 +1469,7 @@ void hgetexCommand(client *c) {
 
         /* Delete the object in case it was left empty */
         if (hashTypeLength(o) == 0) {
+            dbUnTrackKeyWithVolaItemsIfNeeded(c->db, o);
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         } else {
