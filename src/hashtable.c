@@ -369,8 +369,8 @@ typedef struct {
 /* --- Internal functions --- */
 
 /* --- Access API --- */
-static inline hashtableEntryValidationState validateElementIfNeeded(hashtable *ht, void *elem) {
-    if (ht->type->validateEntry == NULL) return ENTRY_VALID;
+static inline bool validateElementIfNeeded(hashtable *ht, void *elem) {
+    if (ht->type->validateEntry == NULL) return true;
     return ht->type->validateEntry(ht, elem);
 }
 
@@ -691,7 +691,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     if (compareKeys(ht, key, elem_key) == 0) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
-        if (validateElementIfNeeded(ht, entry) != ENTRY_VALID) {
+        if (!validateElementIfNeeded(ht, entry)) {
             return 0;
         }
         *pos_in_bucket = pos;
@@ -1786,7 +1786,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             if (b->presence != 0) {
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                    if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
+                    if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                         void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                         fn(privdata, emit);
                     }
@@ -1828,7 +1828,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             do {
                 if (b->presence) {
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                        if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
+                        if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                             fn(privdata, emit);
                         }
@@ -1858,7 +1858,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 do {
                     if (b->presence) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                            if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos]) == ENTRY_VALID) {
+                            if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                                 fn(privdata, emit);
                             }
@@ -2048,7 +2048,7 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
             /* No entry here. */
             continue;
         }
-        if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket]) != ENTRY_VALID) {
+        if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && !validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket])) {
             continue;
         }
         /* Return the entry at this position. */

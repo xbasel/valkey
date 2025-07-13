@@ -677,7 +677,7 @@ size_t hashHashtableTypeMetadataSize(void) {
     return sizeof(void *);
 }
 
-extern hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry);
+extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,

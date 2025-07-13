@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* --- Opaque types --- */
 
@@ -62,8 +63,8 @@ typedef struct {
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
-    /* Check for entry access is valid or not. Invalid access will just treat the entry as not-exist. */
-    hashtableEntryValidationState (*validateEntry)(hashtable *ht, void *entry);
+    /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
+    bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.
      * Optional. */
     void (*entryDestructor)(void *entry);
