@@ -48,7 +48,7 @@
                         "const": -1
                     },
                     {
-                        "description": "The expiration time associated with the hash key field, is seconds.",
+                        "description": "The expiration time associated with the hash key field, in seconds.",
                         "type": "integer",
                         "minimum": 0
                     }

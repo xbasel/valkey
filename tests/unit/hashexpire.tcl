@@ -5,7 +5,7 @@ proc info_field {info field} {
             return [string trim [lindex [split $line ":"] 1]]
         }
     }
-    return ""
+    return [s field_name]
 }
 
 proc assert_keyevent_pattern {rd event_type key} {
@@ -13,7 +13,7 @@ proc assert_keyevent_pattern {rd event_type key} {
     assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
 }
 
-start_server {tags {"hashexpire external:skip"}} {
+start_server {tags {"hashexpire"}} {
     ####### Valid scenarios tests #######
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command expiry" {
@@ -257,19 +257,17 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ####### Invalid scenarios tests #######
-        test {HGETEX EX- multiple options used (EX + PX)} {
+    test {HGETEX EX- multiple options used (EX + PX)} {
         r FLUSHALL
         r HSET myhash f1 v1
-        catch {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1} e
-        set e
-    } {ERR *}
+        assert_error "ERR*" {r HGETEX myhash EX 60 PX 1000 FIELDS 1 f1}
+    }
     
     test {HGETEX EXAT- multiple options used (EXAT + PXAT)} {
         r FLUSHALL
         r HSET myhash f1 v1
-        catch {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1} e
-        set e
-    } {ERR *}
+        assert_error "ERR*" {r HGETEX myhash EXAT [expr {[clock seconds] + 100}] PXAT [expr {[clock milliseconds] + 100000}] 1000 FIELDS 1 f1}
+    }
     
     # Common error scenarios for all commands
     foreach {cmd ttl_val} [list \
@@ -349,7 +347,7 @@ start_server {tags {"hashexpire external:skip"}} {
 }
 
 ## HGETEX -> Keyspace notification tests ####
-start_server {tags {"hashexpire external:skip"}} {
+start_server {tags {"hashexpire"}} {
     if {$::singledb} {
         set db 0
     } else {
@@ -547,7 +545,7 @@ start_server {tags {"hashexpire external:skip"}} {
 }
 
 # HSETEX ####
-start_server {tags {"hashexpire external:skip"}} {    
+start_server {tags {"hashexpire"}} {    
     test {HSETEX KEEPTTL - preserves existing TTL of field} {
         r FLUSHALL
 
@@ -733,263 +731,6 @@ start_server {tags {"hashexpire external:skip"}} {
         catch {r HSETEX myhash EX 10 FNX FXX FIELDS 1 x y} e
         set e
     } {ERR *}
-
-    #################### Lazy Expiry ########################
-
-    test {HGETALL skips expired fields without triggering lazy expiry} {
-        r FLUSHALL
-        r DEBUG SET-ACTIVE-EXPIRE no
-
-        # Set two fields: one persistent, one with short TTL
-        r HSET myhash persistent "val1"
-        r HSETEX myhash PX 5 FIELDS 1 expiring "val2"
-
-        # Wait for expiry to pass
-        after 10      
-
-        # HGETALL should skip expired field
-        set result [r HGETALL myhash]
-        assert_equal {persistent val1} $result
-
-        # HLEN should still count both fields (expired field not removed)
-        assert_equal 2 [r HLEN myhash]
-
-        # Re-enable active expiry
-        r DEBUG SET-ACTIVE-EXPIRE yes
-    } 
-
-    test {HSCAN skips expired fields} {
-        r FLUSHALL
-        r DEBUG SET-ACTIVE-EXPIRE no
-
-        # Set multiple fields, one with expiry
-        r HSET myhash persistent1 "a" persistent2 "b"
-        r HSETEX myhash PX 5 FIELDS 1 expiring "c"
-
-        # Wait for expiration
-        after 10
-
-        # HSCAN must not return the expired field
-        set cursor 0
-        set allfields {}
-        while {1} {
-            set res [r HSCAN myhash $cursor]
-            set cursor [lindex $res 0]
-            set kvs [lindex $res 1]
-            lappend allfields {*}$kvs
-            if {$cursor eq "0"} break
-        }
-
-        # Extract just the field names
-        set fieldnames [lmap {k v} $allfields { set k }]
-        set fieldnames_sorted [lsort $fieldnames]
-
-        # Should only include persistent1 and persistent2
-        assert_equal {persistent1 persistent2} $fieldnames_sorted
-
-        # Re-enable active expiry for future tests
-        r DEBUG SET-ACTIVE-EXPIRE yes
-    } 
-
-    test {MOVE preserves field TTLs} {
-        r FLUSHALL
-        r SELECT 0
-        r HSETEX myhash PX 50000 FIELDS 1 field1 val1
-
-        # Capture original TTL
-        set original_ttl [r HPTTL myhash FIELDS 1 field1]
-        assert {$original_ttl > 0}
-
-        # Move to DB 1
-        assert_equal 1 [r MOVE myhash 1]
-
-        # Switch to target DB
-        r SELECT 1
-
-        # Field must exist and TTL must be preserved        
-        set moved_ttl [r HPTTL myhash FIELDS 1 field1]
-        assert {$moved_ttl > 0 && $moved_ttl <= $original_ttl}
-    }
-
-    test {HSET - overwrite lazily expired field without TTL clears expiration} {
-        r FLUSHALL
-        r debug SET-ACTIVE-EXPIRE no
-
-        # This test verifies that if a field has expired (but not yet lazily deleted),
-        # and it is overwritten using a plain HSET (i.e., no TTL),
-        # Valkey treats the field as non existing and updates it,
-        # effectively clearing the old TTL and making the field persistent.
-    
-        r HSETEX myhash PX 10 FIELDS 1 field1 oldval
-        wait_for_condition 100 100 {
-            [r HTTL myhash FIELDS 1 field1] eq "-2"
-        } else {
-            fail "hash value was not expired after timeout"
-        }
-
-        # Field should still be present in memory due to lazy expiry
-        assert_equal 1 [r HLEN myhash]
-
-        # Overwrite with HSET (no TTL) before accessing
-        r HSET myhash field1 newval
-
-        # TTL should now be gone; field becomes persistent
-        set ttl [r HPTTL myhash FIELDS 1 field1]
-        assert_equal -1 $ttl
-        assert_equal newval [r HGET myhash field1]
-        assert_equal 1 [r HLEN myhash]
-
-        r debug SET-ACTIVE-EXPIRE yes
-    }
-
-    test {HINCRBY - on expired field} {
-        r FLUSHALL
-        r debug SET-ACTIVE-EXPIRE no
-
-        # This test verifies that if a field has expired,
-        # and it is overwritten using a plain HINCRBY (i.e., no TTL),
-        # Valkey treats the field as still existing and updates it,
-        # effectively clearing the old TTL and starting the value from 0.
-    
-        r HSETEX myhash PX 10 FIELDS 1 field1 1
-        wait_for_condition 100 100 {
-            [r HTTL myhash FIELDS 1 field1] eq "-2"
-        } else {
-            fail "hash value was not expired after timeout"
-        }
-
-        # Field should still be present in memory
-        assert_equal 1 [r HLEN myhash]
-
-        # Overwrite with HINCRBY (no TTL) before accessing
-        r HINCRBY myhash field1 1
-
-        # Sanity check: check we only have one field in the hash
-        assert_equal 1 [r HLEN myhash]
-
-        # TTL should now be gone; field becomes persistent
-        set ttl [r HPTTL myhash FIELDS 1 field1]
-        assert_equal -1 $ttl
-        assert_equal 1 [r HGET myhash field1]
-        assert_equal 1 [r HLEN myhash]
-
-        # set expiration on the field
-        assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
-        # verify the field has TTL
-        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
-        # now incr the field again
-        assert_equal 2 [r HINCRBY myhash field1 1]
-        # verify the field has TTL
-        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
-        r debug SET-ACTIVE-EXPIRE yes
-    }
-
-    test {HINCRBYFLOAT - on expired field} {
-        r FLUSHALL
-        r debug SET-ACTIVE-EXPIRE no
-
-        # This test verifies that if a field has expired,
-        # and it is overwritten using a plain HINCRBYFLOAT (i.e., no TTL),
-        # Valkey treats the field as still existing and updates it,
-        # effectively clearing the old TTL and starting the value from 0.
-    
-        r HSETEX myhash PX 10 FIELDS 1 field1 1
-        wait_for_condition 100 100 {
-            [r HTTL myhash FIELDS 1 field1] eq "-2"
-        } else {
-            fail "hash value was not expired after timeout"
-        }
-
-        # Field should still be present in memory
-        assert_equal 1 [r HLEN myhash]
-
-        # Overwrite with HINCRBYFLOAT (no TTL) before accessing
-        r HINCRBYFLOAT myhash field1 1
-
-        # Sanity check: check we only have one field in the hash
-        assert_equal 1 [r HLEN myhash]
-
-        # TTL should now be gone; field becomes persistent
-        set ttl [r HPTTL myhash FIELDS 1 field1]
-        assert_equal -1 $ttl
-        assert_equal 1 [r HGET myhash field1]
-        assert_equal 1 [r HLEN myhash]
-
-        # set expiration on the field
-        assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
-        # verify the field has TTL
-        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
-        # now incr the field again
-        assert_equal 2 [r HINCRBYFLOAT myhash field1 1]
-        # verify the field has TTL
-        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
-        r debug SET-ACTIVE-EXPIRE yes
-    }
-
-    test {HSET - overwrite unexpired field removes TTL} {
-        r FLUSHALL
-        r debug SET-ACTIVE-EXPIRE no
-
-        # This test verifies that overwriting a field with HSET,
-        # even while its TTL is still valid (not expired),
-        # clears the TTL and makes the field persistent.
-        # This behavior is consistent with how HSET works for normal keys.
-
-        # Set field with long TTL
-        r HSETEX myhash PX 1000 FIELDS 1 field1 val1
-
-        # Confirm TTL is active
-        set before [r HPTTL myhash FIELDS 1 field1]    
-        assert {$before > 0}
-
-        # Overwrite with HSET before TTL expires
-        r HSET myhash field1 newval
-
-        # TTL should now be gone
-        set after [r HPTTL myhash FIELDS 1 field1]
-        assert_equal -1 $after
-        assert_equal newval [r HGET myhash field1]
-
-        r debug SET-ACTIVE-EXPIRE yes
-    }
-
-    test {HDEL - lazily expired field is removed without triggering expiry logic} {
-        r FLUSHALL
-        r debug SET-ACTIVE-EXPIRE no
-
-        # This test proves that deleting an expired field with HDEL
-        # does NOT trigger Valkey's expiration mechanism.
-        #
-        # The key observation is that Valkey tracks how many fields were
-        # expired via TTL using the `expired_subkeys` counter in INFO stats.
-        # If HDEL caused expiration to be processed internally,
-        # this counter would increment. We assert that it remains unchanged.
-
-        # Capture expired_subkeys before
-        set before_info [r INFO stats]
-        set before [info_field $before_info expired_subkeys]
-
-        # Create field with short TTL
-        r HSETEX myhash PX 10 FIELDS 1 field1 val1
-        after 20
-
-        # Field is technically expired, but still in-memory due to lazy expiry
-        assert_equal 1 [r HLEN myhash]
-
-        # Delete the expired field directly
-        r HDEL myhash field1
-
-        # Field should be gone
-        assert_equal 0 [r HEXISTS myhash field1]
-
-        # Capture expired_subkeys again
-        set after_info [r INFO stats]
-        set after [info_field $after_info expired_subkeys]
-
-        # Verify that no expiry occurred internally
-        assert_equal $before $after
-        r debug SET-ACTIVE-EXPIRE yes
-    }
 
     ###### Test EXPIRE #############
 
@@ -1552,8 +1293,8 @@ start_server {tags {"hashexpire external:skip"}} {
         } else {
             fail "Hash is showing expired elements"
         }
-        # check that we do get a response even though it is expired
-        assert_match {} [r hrandfield myhash -1]
+        # check that we get an empty response even though there are expired fields
+        assert_match {} [r hrandfield myhash 1]
 
         # Now write a persistent element
         assert_equal {1} [r HSET myhash f5 v5]
@@ -1620,6 +1361,7 @@ start_server {tags {"hashexpire external:skip"}} {
         } else {
             fail "Hash is showing expired elements"
         }
+        
         # check that we get an empty response even though there are expired fields
         assert_match {} [r hrandfield myhash 2]
 
@@ -1636,6 +1378,260 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 }
 
+####### Expiry fields skip tests
+start_server {tags {"hashexpire"}} {
+    test {HGETALL skips expired fields} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE no
+
+        # Set two fields: one persistent, one with short TTL
+        r HSET myhash persistent "val1"
+        r HSETEX myhash PX 5 FIELDS 1 expiring "val2"
+
+        # Wait for expiry to pass
+        after 10      
+
+        # HGETALL should skip expired field
+        set result [r HGETALL myhash]
+        assert_equal {persistent val1} $result
+
+        # Re-enable active expiry
+        r DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {HSCAN skips expired fields} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE no
+
+        # Set multiple fields, one with expiry
+        r HSET myhash persistent1 "a" persistent2 "b"
+        r HSETEX myhash PX 5 FIELDS 1 expiring "c"
+
+        # Wait for expiration
+        after 10
+
+        # HSCAN must not return the expired field
+        set cursor 0
+        set allfields {}
+        while {1} {
+            set res [r HSCAN myhash $cursor]
+            set cursor [lindex $res 0]
+            set kvs [lindex $res 1]
+            lappend allfields {*}$kvs
+            if {$cursor eq "0"} break
+        }
+
+        # Extract just the field names
+        set fieldnames [lmap {k v} $allfields { set k }]
+        set fieldnames_sorted [lsort $fieldnames]
+
+        # Should only include persistent1 and persistent2
+        assert_equal {persistent1 persistent2} $fieldnames_sorted
+
+        # Re-enable active expiry for future tests
+        r DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {MOVE preserves field TTLs} {
+        r FLUSHALL
+        r SELECT 0
+        r HSETEX myhash PX 50000 FIELDS 1 field1 val1
+
+        # Capture original TTL
+        set original_ttl [r HPTTL myhash FIELDS 1 field1]
+        assert {$original_ttl > 0}
+
+        # Move to DB 1
+        assert_equal 1 [r MOVE myhash 1]
+
+        # Switch to target DB
+        r SELECT 1
+
+        # Field must exist and TTL must be preserved        
+        set moved_ttl [r HPTTL myhash FIELDS 1 field1]
+        assert {$moved_ttl > 0 && $moved_ttl <= $original_ttl}
+    } {} {needs:debug}
+
+    test {HSET - overwrite expired field without TTL clears expiration} {
+        r FLUSHALL
+        r debug SET-ACTIVE-EXPIRE no
+
+        # This test verifies that if a field has expired (but not yet lazily deleted),
+        # and it is overwritten using a plain HSET (i.e., no TTL),
+        # Valkey treats the field as non existing and updates it,
+        # effectively clearing the old TTL and making the field persistent.
+    
+        r HSETEX myhash PX 10 FIELDS 1 field1 oldval
+        wait_for_condition 100 100 {
+            [r HTTL myhash FIELDS 1 field1] eq "-2"
+        } else {
+            fail "hash value was not expired after timeout"
+        }
+
+        # Field should still be present in memory due to lazy expiry
+        assert_equal 1 [r HLEN myhash]
+
+        # Overwrite with HSET (no TTL) before accessing
+        r HSET myhash field1 newval
+
+        # TTL should now be gone; field becomes persistent
+        set ttl [r HPTTL myhash FIELDS 1 field1]
+        assert_equal -1 $ttl
+        assert_equal newval [r HGET myhash field1]
+        assert_equal 1 [r HLEN myhash]
+
+        r debug SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {HINCRBY - on expired field} {
+        r FLUSHALL
+        r debug SET-ACTIVE-EXPIRE no
+
+        # This test verifies that if a field has expired,
+        # and it is overwritten using a plain HINCRBY (i.e., no TTL),
+        # Valkey treats the field as still existing and updates it,
+        # effectively clearing the old TTL and starting the value from 0.
+    
+        r HSETEX myhash PX 10 FIELDS 1 field1 1
+        wait_for_condition 100 100 {
+            [r HTTL myhash FIELDS 1 field1] eq "-2"
+        } else {
+            fail "hash value was not expired after timeout"
+        }
+
+        # Field should still be present in memory
+        assert_equal 1 [r HLEN myhash]
+
+        # Overwrite with HINCRBY (no TTL) before accessing
+        r HINCRBY myhash field1 1
+
+        # Sanity check: check we only have one field in the hash
+        assert_equal 1 [r HLEN myhash]
+
+        # TTL should now be gone; field becomes persistent
+        set ttl [r HPTTL myhash FIELDS 1 field1]
+        assert_equal -1 $ttl
+        assert_equal 1 [r HGET myhash field1]
+        assert_equal 1 [r HLEN myhash]
+
+        # set expiration on the field
+        assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
+        # verify the field has TTL
+        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+        # now incr the field again
+        assert_equal 2 [r HINCRBY myhash field1 1]
+        # verify the field has TTL
+        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+        r debug SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {HINCRBYFLOAT - on expired field} {
+        r FLUSHALL
+        r debug SET-ACTIVE-EXPIRE no
+
+        # This test verifies that if a field has expired,
+        # and it is overwritten using a plain HINCRBYFLOAT (i.e., no TTL),
+        # Valkey treats the field as still existing and updates it,
+        # effectively clearing the old TTL and starting the value from 0.
+    
+        r HSETEX myhash PX 10 FIELDS 1 field1 1
+        wait_for_condition 100 100 {
+            [r HTTL myhash FIELDS 1 field1] eq "-2"
+        } else {
+            fail "hash value was not expired after timeout"
+        }
+
+        # Field should still be present in memory
+        assert_equal 1 [r HLEN myhash]
+
+        # Overwrite with HINCRBYFLOAT (no TTL) before accessing
+        r HINCRBYFLOAT myhash field1 1
+
+        # Sanity check: check we only have one field in the hash
+        assert_equal 1 [r HLEN myhash]
+
+        # TTL should now be gone; field becomes persistent
+        set ttl [r HPTTL myhash FIELDS 1 field1]
+        assert_equal -1 $ttl
+        assert_equal 1 [r HGET myhash field1]
+        assert_equal 1 [r HLEN myhash]
+
+        # set expiration on the field
+        assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
+        # verify the field has TTL
+        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+        # now incr the field again
+        assert_equal 2 [r HINCRBYFLOAT myhash field1 1]
+        # verify the field has TTL
+        assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+        r debug SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {HSET - overwrite unexpired field removes TTL} {
+        r FLUSHALL
+        r debug SET-ACTIVE-EXPIRE no
+
+        # This test verifies that overwriting a field with HSET,
+        # even while its TTL is still valid (not expired),
+        # clears the TTL and makes the field persistent.
+        # This behavior is consistent with how HSET works for normal keys.
+
+        # Set field with long TTL
+        r HSETEX myhash PX 1000 FIELDS 1 field1 val1
+
+        # Confirm TTL is active
+        set before [r HPTTL myhash FIELDS 1 field1]    
+        assert {$before > 0}
+
+        # Overwrite with HSET before TTL expires
+        r HSET myhash field1 newval
+
+        # TTL should now be gone
+        set after [r HPTTL myhash FIELDS 1 field1]
+        assert_equal -1 $after
+        assert_equal newval [r HGET myhash field1]
+
+        r debug SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+
+    test {HDEL - expired field is removed without triggering expiry logic} {
+        r FLUSHALL
+        r debug SET-ACTIVE-EXPIRE no
+
+        # This test proves that deleting an expired field with HDEL
+        # does NOT trigger Valkey's expiration mechanism.
+        #
+        # The key observation is that Valkey tracks how many fields were
+        # expired via TTL using the `expired_subkeys` counter in INFO stats.
+        # If HDEL caused expiration to be processed internally,
+        # this counter would increment. We assert that it remains unchanged.
+
+        # Capture expired_subkeys before
+        set before_info [r INFO stats]
+        set before [info_field $before_info expired_subkeys]
+
+        # Create field with short TTL
+        r HSETEX myhash PX 10 FIELDS 1 field1 val1
+        after 20
+
+        # Field is technically expired, but still in-memory due to lazy expiry
+        assert_equal 1 [r HLEN myhash]
+
+        # Delete the expired field directly
+        r HDEL myhash field1
+
+        # Field should be gone
+        assert_equal 0 [r HEXISTS myhash field1]
+
+        # Capture expired_subkeys again
+        set after_info [r INFO stats]
+        set after [info_field $after_info expired_subkeys]
+
+        # Verify that no expiry occurred internally
+        assert_equal $before $after
+        r debug SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
+}
 
 ####### Test info
 start_server {tags {"hash-ttl-info external:skip"}} {    

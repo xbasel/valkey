@@ -58,7 +58,7 @@ bool hashTypeHasVolatileElements(robj *o) {
 
 /* make any access to the hash object elements ignore the specific elements expiration.
  * This is mainly in order to be able to access hash elements which are already expired. */
-void hashTypeIgnoreTTL(robj *o, bool ignore) {
+static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && !hashTypeHasVolatileElements(o)) {
@@ -849,6 +849,8 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
                 e = NULL;
                 continue;
             } else if (maxtries == 0) {
+                /* in case we will not be able to locate an entry which is not expired, we will just not return any
+                 * result. An alternative would have been that we end up returning an expired entry. */
                 field->sval = NULL;
                 if (val) val->sval = NULL;
                 break;
