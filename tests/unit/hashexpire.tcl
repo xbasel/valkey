@@ -69,6 +69,7 @@ start_server {tags {"hashexpire"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command expiry" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             r HSET myhash f1 v1
             
             # Configuration dictionary mapping expiry commands to their test parameters:
@@ -98,7 +99,9 @@ start_server {tags {"hashexpire"}} {
             }
             after $wait_time
             assert_equal "" [r HGET myhash f1]
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
 
         test "HGETEX $command with mix of existing and non-existing fields" {
             r FLUSHALL
@@ -125,6 +128,7 @@ start_server {tags {"hashexpire"}} {
 
         test "HGETEX $command on more then 1 field" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             r HSET myhash f1 v1 f2 v2
             
             set config [dict create \
@@ -152,7 +156,9 @@ start_server {tags {"hashexpire"}} {
             after $wait_time
             assert_equal "" [r HGET myhash f1]
             assert_equal "" [r HGET myhash f2]
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
 
         test "HGETEX $command -> PERSIST" {
             r FLUSHALL
@@ -278,6 +284,7 @@ start_server {tags {"hashexpire"}} {
         }
         
         test "HGETEX $command overwrites existing field TTL with smaller value" {
+            r FLUSHALL
             set config [dict create \
                 EX   [list setup_cmd EX setup_val 100000 smaller_val 50000] \
                 PX   [list setup_cmd PX setup_val 100000000 smaller_val 50000000] \
@@ -289,7 +296,6 @@ start_server {tags {"hashexpire"}} {
             set setup_val [dict get $params setup_val]
             set smaller_val [dict get $params smaller_val]
             
-            r FLUSHALL
             r HSETEX myhash $setup_cmd $setup_val FIELDS 1 f1 v1
             set old_ttl [r HTTL myhash FIELDS 1 f1]
             r HGETEX myhash $command $smaller_val FIELDS 1 f1
@@ -427,7 +433,6 @@ start_server {tags {"hashexpire"}} {
             set rd [valkey_deferring_client]
             assert_equal {1} [psubscribe $rd __keyevent@*]
             
-            
             r HGETEX myhash $command $expire_time FIELDS 1 f1
 
             assert_keyevent_pattern $rd hexpire myhash
@@ -460,9 +465,9 @@ start_server {tags {"hashexpire"}} {
             # This HGETEX targets a non-existent field, so no notification about hexpire should be emitted
             r HGETEX myhash $command $expire_time FIELDS 1 f2
             
-            # # Verify no notification (getting hset and not hexpire)
-            # r HSET dummy dummy dummy
-            # assert_keyevent_pattern $rd hset dummy
+            # Verify no notification (getting hset and not hexpire)
+            r HSET dummy dummy dummy
+            assert_keyevent_pattern $rd hset dummy
 
             $rd close
         }
@@ -481,8 +486,6 @@ start_server {tags {"hashexpire"}} {
         assert_keyevent_pattern $rd hpersist myhash
         $rd close
     }
-    
-    
 
     foreach command {EX PX EXAT PXAT} {
         set config [dict create \
@@ -874,6 +877,15 @@ start_server {tags {"hashexpire"}} {
         r HEXPIRE myhash 3 FIELDS 1 field1
         set ttl [r HTTL myhash FIELDS 1 field1]
         assert {$ttl >= 2}
+    }
+
+    # HEXPIRE on a non-existent field
+    test {HEXPIRE on a non-existent field (should not create field)} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        r HEXPIRE myhash 1000 FIELDS 1 f2
+        assert_equal 0 [r HEXISTS myhash f2]
+        assert_equal -2 [r HTTL myhash FIELDS 1 f2]
     }
 
     # Error Cases
@@ -1333,6 +1345,15 @@ start_server {tags {"hashexpire"}} {
         # f4 does not exist
         assert_equal {1 -1 -2} [r hpersist myhash FIELDS 3 f1 f2 f4]
     }
+    
+    test {HPERSIST, then HEXPIRE, check new TTL is set} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        r HEXPIRE myhash 1000 FIELDS 1 f1
+        assert_equal 1 [r HPERSIST myhash FIELDS 1 f1]
+        r HEXPIRE myhash 2000 FIELDS 1 f1
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 1000
+    }
 
      #################### HRANDFIELD ##################
 
@@ -1682,6 +1703,17 @@ start_server {tags {"hashexpire"}} {
         assert_equal $before $after
         r debug SET-ACTIVE-EXPIRE yes
     } {OK} {needs:debug}
+
+    test {HDEL on field with TTL, then re-add and check TTL is gone} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        r HEXPIRE myhash 10000 FIELDS 1 f1
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 0
+        r HDEL myhash f1
+        r HSET myhash f1 v2
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+    }
+
 }
 
 ####### Test info
@@ -1947,11 +1979,11 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {1} [psubscribe $rd_primary __keyevent@*]
             assert_equal {1} [psubscribe $rd_replica_1 __keyevent@*]
 
-            # Create hash and timing - f1 < f2 < f3 expiry times
-            set f1_exp [expr {[clock seconds] + 10000}]
 
             # Setup hash, set expire and set expire 0
             $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+            # Create hash and timing - f1 < f2 expiry times
+            set f1_exp [expr {[clock seconds] + 10000}]
             $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
             wait_for_ofs_sync $primary $replica_1
             
@@ -2048,8 +2080,10 @@ start_server {tags {"hashexpire external:skip"}} {
             }
         }
 
-        test {Replica Failover/Promotion to Primary} {
+        test {Replica Failover} {
             $primary FLUSHALL
+            $primary DEBUG SET-ACTIVE-EXPIRE no
+            $replica_1 DEBUG SET-ACTIVE-EXPIRE no
             ####### Replication setup #######
             $replica_1 replicaof $primary_host $primary_port
             wait_for_condition 50 100 {
@@ -2110,25 +2144,149 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "f1 not expired"
             }
 
-            # Verify expiry
+            # Verify expiry in replica
             assert_equal "" [$replica_1 HGET myhash f1]
             assert_equal 3 [$replica_1 HLEN myhash]
+
+            # Verify no expiry in primary
+            assert_equal "v1" [$primary HGET myhash f1]
+
             # Change TTL of f2
             $replica_1 HEXPIRE myhash 1000000 FIELDS 1 f2 ;# will trigger hexpire
             assert_morethan [$replica_1 HTTL myhash FIELDS 1 f2] 9000
+            assert_equal $f2_exp [$primary HEXPIRETIME myhash FIELDS 1 f2]
+            
             # Change TTL of f2 to 0 (immediate expiry)
             $replica_1 HGETEX myhash EX 0 FIELDS 1 f2 ;# will trigger hexpired
             # Verify final state
             assert_equal 2 [$replica_1 HLEN myhash]
             assert_equal "{} {} v3" [$replica_1 HGETEX myhash FIELDS 3 f1 f2 f3]
+            assert_equal "v1 v2 v3" [$primary HGETEX myhash FIELDS 3 f1 f2 f3] ;# No change for primary
 
             assert_keyevent_pattern $rd_replica hexpire myhash
             assert_keyevent_pattern $rd_replica hexpire myhash
             assert_keyevent_pattern $rd_replica hexpired myhash
 
             $rd_replica close
-        }
+            # Re-enable active expiry
+            $primary DEBUG SET-ACTIVE-EXPIRE yes
+            $replica_1 DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
         
+
+        test {Promotion to primary} {
+            $primary FLUSHALL
+            $primary DEBUG SET-ACTIVE-EXPIRE no
+            $replica_1 DEBUG SET-ACTIVE-EXPIRE no
+            ####### Replication setup #######
+            $replica_1 replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica_1 role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica_1 info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+            
+            # Create hash fields with TTL on primary
+            set f1_exp [expr {[clock seconds] + 200}]
+            set f2_exp [expr {[clock seconds] + 300000}]
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1
+            $primary HEXPIREAT myhash $f2_exp FIELDS 1 f2
+            # f3 remains persistent
+
+            # Wait for full sync
+            wait_for_ofs_sync $primary $replica_1
+
+            # Verify primary and replica are the same
+            foreach instance [list $primary $replica_1] {
+                assert_equal $f1_exp [$instance HEXPIRETIME myhash FIELDS 1 f1]
+                assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
+                assert_equal -1 [$instance HTTL myhash FIELDS 1 f3]
+                assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [$instance info keyspace]] keys=%d]
+                assert_equal "v1" [$instance HGET myhash f1]
+                assert_equal "v2" [$instance HGET myhash f2]
+                assert_equal "v3" [$instance HGET myhash f3]
+                assert_equal 3 [$instance HLEN myhash]
+            }
+
+            # Perform promotion to primary
+            $primary FAILOVER TO $replica_1_host $replica_1_port
+            # Wait for replica to become primary
+            wait_for_condition 100 100 {
+                [info_field [$replica_1 info replication] role] eq "master"
+            } else {
+                fail "Replica didn't become master"
+            }
+
+            # Setup keyspace notifications
+            $primary config set notify-keyspace-events KEA
+            $replica_1 config set notify-keyspace-events KEA
+            set rd_primary [valkey_deferring_client -1]
+            set rd_replica_1 [valkey_deferring_client $replica_1_host $replica_1_port]
+            assert_equal {1} [psubscribe $rd_primary __keyevent@*]
+            assert_equal {1} [psubscribe $rd_replica_1 __keyevent@*]
+
+            # Check all values that checked before are the same after the failover
+            foreach instance [list $primary $replica_1] {
+                assert_equal $f1_exp [$instance HEXPIRETIME myhash FIELDS 1 f1]
+                assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
+                assert_equal -1 [$instance HTTL myhash FIELDS 1 f3]
+                assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [$instance info keyspace]] keys=%d]
+                assert_equal "v1 v2 v3" [$instance HMGET myhash f1 f2 f3]
+                assert_equal 3 [$instance HLEN myhash]
+            }
+            
+            # Set f1 to expire in 1 second and wait for expiration
+            $replica_1 HEXPIRE myhash 1 FIELDS 1 f1 ;# will trigger hexpire
+            wait_for_ofs_sync $replica_1 $primary
+            wait_for_condition 50 100 {
+                [$replica_1 HTTL myhash FIELDS 1 f1] eq -2
+            } else {
+                fail "f1 not expired"
+            }
+
+            # Verify replica and primary are sync
+            foreach instance [list $primary $replica_1] {
+                assert_equal $f2_exp [$instance HEXPIRETIME myhash FIELDS 1 f2]
+                assert_equal -2 [$instance HTTL myhash FIELDS 1 f1]
+                assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [$instance info keyspace]] keys=%d]
+                assert_equal "" [$instance HGET myhash f1]
+                assert_equal "v2" [$instance HGET myhash f2]
+                assert_equal "v3" [$instance HGET myhash f3]
+                assert_equal 3 [$instance HLEN myhash]
+            }
+
+            # Change TTL of f2
+            $replica_1 HEXPIRE myhash 1000000 FIELDS 1 f2 ;# will trigger hexpire
+            wait_for_ofs_sync $replica_1 $primary
+            foreach instance [list $primary $replica_1] {
+                assert_morethan [$instance HTTL myhash FIELDS 1 f2] 9000
+            }
+            
+            # Change TTL of f2 to 0 (immediate expiry)
+            $replica_1 HGETEX myhash EX 0 FIELDS 1 f2 ;# will trigger hexpired for replica_1 and hdel for primary
+            # Verify final state
+            foreach instance [list $primary $replica_1] {
+                assert_equal 2 [$instance HLEN myhash]
+                assert_equal "" [$instance HGET myhash f1]
+                assert_equal "" [$instance HGET myhash f2]
+                assert_equal "v3" [$instance HGET myhash f3]
+            }
+
+            foreach rd [list $rd_replica_1 $rd_primary] {
+                assert_keyevent_pattern $rd hexpire myhash
+                assert_keyevent_pattern $rd hexpire myhash
+            }
+            assert_keyevent_pattern $rd_replica_1 hexpired myhash
+            assert_keyevent_pattern $rd_primary hdel myhash
+
+            $rd_replica_1 close
+            $rd_primary close
+            # Re-enable active expiry
+            $primary DEBUG SET-ACTIVE-EXPIRE yes
+            $replica_1 DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
     }
 }
 
@@ -2150,6 +2308,8 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
     set key "{mymigrate}myhash"
 
     test {Hash with TTL fields migrates correctly between nodes} {
+        R 0 DEBUG SET-ACTIVE-EXPIRE no
+        R 1 DEBUG SET-ACTIVE-EXPIRE no
         # Create hash fields
         R 0 HSET $key f1 v1 f2 v2 f3 v3
 
@@ -2193,13 +2353,17 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         assert_equal -2 [R 1 HTTL $key FIELDS 1 f1]
 
         $rd close
-    }
+        # Re-enable active expiry
+        R 0 DEBUG SET-ACTIVE-EXPIRE yes
+        R 1 DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
 }
 
 start_server {tags {"hashexpire external:skip"}} {
     foreach cmd {RENAME RESTORE} {
         test "$cmd Preserves Field TTLs" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             r HSET myhash f1 v1 f2 v2
             r HEXPIRE myhash 200 FIELDS 1 f1
 
@@ -2240,6 +2404,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {COPY Preserves TTLs} {
         r flushall
+        r DEBUG SET-ACTIVE-EXPIRE no
         
         # Create hash with fields
         r HSET myhash f1 v1 f3 v3 f4 v4
@@ -2307,10 +2472,13 @@ start_server {tags {"hashexpire external:skip"}} {
         assert_equal "" [r HGET myhash f3]
         assert_equal "v1" [r HGET newhash2 f1]
         assert_equal "v3" [r HGET newhash2 f3]
-    }
+        # Re-enable active expiry
+        r DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
 
     test {Hash Encoding Transitions with TTL - Add TTL to Existing Fields} {
         r flushall
+        r DEBUG SET-ACTIVE-EXPIRE no
         
         # Create small hash with listpack encoding
         r HSET myhash f1 v1 f2 v2
@@ -2330,10 +2498,13 @@ start_server {tags {"hashexpire external:skip"}} {
         # Veridy expiry
         assert_morethan [r HTTL myhash FIELDS 1 f1] 100
         assert_equal -1 [r HTTL myhash FIELDS 1 f2]
-    }
+        # Re-enable active expiry
+        r DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
     
     test {Hash Encoding Transitions with TTL - Create New Fields with TTL} {
         r flushall
+        r DEBUG SET-ACTIVE-EXPIRE no
         
         # Create small hash with listpack encoding
         r HSET myhash f1 v1 f2 v2
@@ -2360,7 +2531,9 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_equal -1 [r HTTL myhash FIELDS 1 "f$i"]
             }
         }
-    }
+        # Re-enable active expiry
+        r DEBUG SET-ACTIVE-EXPIRE yes
+    } {OK} {needs:debug}
 }
 
 start_server {tags {"hashexpire external:skip"}} {
@@ -2369,6 +2542,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach time_unit {s, ms} {
         test "Key TTL expires before field TTL: entire hash should be deleted timeunit: $time_unit" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             r config set notify-keyspace-events KEA
             set rd [valkey_deferring_client]
             assert_equal {1} [psubscribe $rd __keyevent@*]
@@ -2396,10 +2570,13 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_keyevent_pattern $rd hexpire myhash
             assert_keyevent_pattern $rd expire myhash
             $rd close
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
 
         test "Field TTL expires before key TTL: only the specific field should expire: $time_unit" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             set rd [valkey_deferring_client]
             assert_equal {1} [psubscribe $rd __keyevent@*]
             
@@ -2426,10 +2603,13 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_keyevent_pattern $rd hset myhash
             assert_keyevent_pattern $rd hexpire myhash
             $rd close
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
 
         test "Key and field TTL expire simultaneously: entire hash should be deleted: $time_unit" {
             r FLUSHALL
+            r DEBUG SET-ACTIVE-EXPIRE no
             
             r HSET myhash f1 v1 f2 v2 f3 v3
             assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
@@ -2457,10 +2637,13 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal "" [r HGET myhash f3]
             assert_match "" [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
             assert_equal 0 [r HLEN myhash]
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
 
         test {Millisecond/Seconds precision} {
             r flushall
+            r DEBUG SET-ACTIVE-EXPIRE no
 
             r HSET myhash f1 v1 f2 v2
             if {$time_unit eq "s"} {
@@ -2473,7 +2656,9 @@ start_server {tags {"hashexpire external:skip"}} {
             
             after 1500
             assert_equal 0 [r EXISTS myhash]
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
     }
 
     test {Ensure that key-level PERSIST on the key don't affect field TTL} {
@@ -2497,6 +2682,7 @@ tags {"aof external:skip"} {
     start_server_aof [list dir $server_path] {
         test {TTL Persistence in AOF} {
             r flushall
+            r DEBUG SET-ACTIVE-EXPIRE no
             r config set appendonly yes
             r config set appendfsync always
 
@@ -2588,7 +2774,9 @@ tags {"aof external:skip"} {
                 assert_equal -1 [r HTTL myhash FIELDS 1 f$i]
                 assert_equal v$i [r HGET myhash f$i]
             }
-        }
+            # Re-enable active expiry
+            r DEBUG SET-ACTIVE-EXPIRE yes
+        } {OK} {needs:debug}
     }
 }
 
