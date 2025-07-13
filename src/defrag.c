@@ -466,14 +466,6 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
     }
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid) {
-    serverDb *db = server.db[dbid];
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
-    defragObjectCtx ctx = {db, ob};
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-}
-
 static void defragQuicklist(robj *ob) {
     quicklist *ql = ob->ptr, *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
@@ -550,6 +542,19 @@ static int defragRaxNode(raxNode **noderef) {
         return 1;
     }
     return 0;
+}
+
+static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore* kvsore) {
+    serverDb *db = server.db[dbid];
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    hashtable *ht = ob->ptr;
+    objectDbContext ctx = {db, ob};
+    if (kvsore == db->keys_with_volatile_items) {
+        vset* vset = hashTypeGetVolatileSet(ob);
+        *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
+    } else {
+        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    }
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -700,6 +705,14 @@ static void defragModule(serverDb *db, robj *obj) {
     if (!moduleDefragValue(sds_key_passed_as_robj, obj, db->id)) defragLater(obj);
 }
 
+/* Replace oldptr with newptr in a kvstore slot,
+ * typically after reallocation. */
+static inline void replaceReallocatedKvstoreEntry(kvstore *kvs, int slot, robj *oldptr, robj *newptr) {
+    hashtable *ht = kvstoreGetHashtable(kvs, slot);
+    int replaced = hashtableReplaceReallocatedEntry(ht, oldptr, newptr);
+    serverAssert(replaced);
+}
+
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 static void defragKey(defragKeysCtx *ctx, robj **elemref) {
@@ -715,9 +728,10 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         if (objectGetExpire(newob) >= 0) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */
-            hashtable *expires_ht = kvstoreGetHashtable(db->expires, slot);
-            int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
-            serverAssert(replaced);
+            replaceReallocatedKvstoreEntry(db->expires, slot, ob, newob);
+        }
+        if (hashTypeHasVolatileElements(newob)) {
+            replaceReallocatedKvstoreEntry(db->keys_with_volatile_items, slot, ob, newob);
         }
         ob = newob;
     }
@@ -777,6 +791,30 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
     server.stat_active_defrag_scanned++;
 }
 
+static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
+    robj *o = *(robj **) elemref;
+    serverAssert(o->type == OBJ_HASH);
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(hashTypeHasVolatileElements(o));
+    vset *vset = hashTypeGetVolatileSet(o);
+    serverAssert(!vsetIsEmpty(vset));
+
+    defragKeysCtx *ctx = privdata;
+    UNUSED(ctx);
+
+    // xbasel
+
+    // if (hashtableSize(o->ptr) > server.active_defrag_max_scan_fields) {
+    if (hashtableSize(o->ptr) > 1) {
+        defragLater(o);
+    } else {
+        size_t cursor = 0;
+        do {
+            cursor = vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);
+        } while (cursor != 0);
+    }
+}
+
 /* Defrag scan callback for a pubsub channels hashtable. */
 static void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragPubSubCtx *ctx = privdata;
@@ -813,7 +851,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
 
 /* returns 0 more work may or may not be needed (see non-zero cursor),
  * and 1 if time is up and more work is needed. */
-static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
+static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore* kvstore) {
     if (ob) {
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
@@ -822,7 +860,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
         } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            scanLaterHash(ob, cursor, dbid);
+            scanLaterHash(ob, cursor, dbid, kvstore);
         } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
@@ -859,7 +897,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         robj *ob = found;
 
         long long key_defragged = server.stat_active_defrag_hits;
-        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid) == 1);
+        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid, ctx->kvstate.kvs) == 1);
         if (key_defragged != server.stat_active_defrag_hits) {
             server.stat_active_defrag_key_hits++;
         } else {
@@ -987,8 +1025,10 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
+    static defragKeysCtx ctx; // STATIC - this persists
+    ctx.dbid = dbid; // TODO xbasel is this even needed?
     return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
-                                    scanHashtableCallbackCountScanned, NULL, NULL);
+                                    dbKeysWithVolatileItemsScanCallback, defragLaterStep, &ctx);
 }
 
 

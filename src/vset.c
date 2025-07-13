@@ -2078,3 +2078,7 @@ size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (
     }
     return 0;
 }
+
+bool vsetHasRax(vset *set) {
+    return vsetBucketType(*set) == VSET_BUCKET_RAX;
+}
