@@ -217,6 +217,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
+    /* Track hash object if it has volatile fields for active expiry. */
     dbTrackKeyWithVolaItemsIfNeeded(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
@@ -1810,6 +1811,9 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
+
+    /* If this is a hash with volatile fields, untrack it before setting the expire,
+     * since objectSetExpire may reallocate it. We'll re-track the new object after. */
     bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
     if (updateHashExpiryKvsgtore) {
         dbUntrackKeyWithVolaItems(db, val);

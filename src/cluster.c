@@ -295,6 +295,9 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
+
+    /* Track the key in the volatile set if it contains fields with expiration.
+     * This ensures it's considered during active expiry cycles. */
     dbTrackKeyWithVolaItemsIfNeeded(c->db, obj);
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
     signalModifiedKey(c, c->db, key);
