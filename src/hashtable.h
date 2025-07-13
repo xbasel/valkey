@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* --- Opaque types --- */
 
@@ -41,11 +42,6 @@ typedef struct hashtableStats hashtableStats;
 typedef uint64_t hashtableIterator[5];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
-
-typedef enum {
-    ENTRY_VALID = 0,
-    ENTRY_INVALID
-} hashtableEntryValidationState;
 
 /* --- Non-opaque types --- */
 
@@ -62,8 +58,8 @@ typedef struct {
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
-    /* Check for entry access is valid or not. Invalid access will just treat the entry as not-exist. */
-    hashtableEntryValidationState (*validateEntry)(hashtable *ht, void *entry);
+    /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
+    bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.
      * Optional. */
     void (*entryDestructor)(void *entry);
@@ -139,6 +135,7 @@ int hashtableExpand(hashtable *ht, size_t size);
 int hashtableTryExpand(hashtable *ht, size_t size);
 int hashtableExpandIfNeeded(hashtable *ht);
 int hashtableShrinkIfNeeded(hashtable *ht);
+int hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
 

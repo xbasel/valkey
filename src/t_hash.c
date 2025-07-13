@@ -117,14 +117,14 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
     }
 }
 
-hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {
+bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
     UNUSED(ht);
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
-    if (policy == POLICY_IGNORE_EXPIRE) return ENTRY_VALID;
+    if (policy == POLICY_IGNORE_EXPIRE) return true;
 
-    if (!entryIsExpired(entry)) return ENTRY_VALID;
+    if (!entryIsExpired(entry)) return true;
 
-    return ENTRY_INVALID;
+    return false;
 }
 
 /*-----------------------------------------------------------------------------

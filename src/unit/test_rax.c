@@ -323,7 +323,7 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 /* Redis Cluster alike fuzz testing.
  *
  * This test simulates the radix tree usage made by Redis Cluster in order
- * to maintain the hash slot -> keys mappig. The keys are alphanumerical
+ * to maintain the hash slot -> keys mapping. The keys are alphanumerical
  * but the first two bytes that are binary (and are the key hashed).
  *
  * In this test there is no comparison with the hash table, the only goal
@@ -492,7 +492,7 @@ int iteratorFuzzTest(int keymode, size_t count) {
             if (array_res) seekidx--;
         }
 
-        /* Both the iteratos should agree about EOF. */
+        /* Both the iterators should agree about EOF. */
         if (array_res != rax_res) {
             printf("Iter fuzz: iterators do not agree about EOF "
                    "at iteration %d:  "
