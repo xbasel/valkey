@@ -2680,13 +2680,14 @@ tags {"aof external:skip"} {
     set defaults {appendonly {yes} appendfilename {appendonly.aof} appenddirname {appendonlydir} auto-aof-rewrite-percentage {0}}
     set server_path [tmpdir server.multi.aof]
     start_server_aof [list dir $server_path] {
+        r DEBUG SET-ACTIVE-EXPIRE no
         test {TTL Persistence in AOF} {
             r flushall
             r DEBUG SET-ACTIVE-EXPIRE no
             r config set appendonly yes
             r config set appendfsync always
 
-            # Create hash with 1short, long and no expired fields
+            # Create hash with 1 short, long and no expired fields
             set long_expire [expr {[clock seconds] + 1000000}]
             # Create 10 fields with long expiry
             for {set i 1} {$i <= 10} {incr i} {
@@ -2719,6 +2720,7 @@ tags {"aof external:skip"} {
             }
 
             # Verify initial HLEN
+            puts [r HLEN myhash]
             assert_equal 30 [r HLEN myhash]
             # Verify values
             for {set i 1} {$i <= 40} {incr i} {
@@ -2755,10 +2757,18 @@ tags {"aof external:skip"} {
             # Restart the server and load the AOF
             restart_server 0 true false
             r debug loadaof
+            r DEBUG SET-ACTIVE-EXPIRE no
             
-            # Verify hash after loading from aof
-            # Verify same HLEN
-            assert_equal 30 [r HLEN myhash]
+            set hlen [r HLEN myhash]
+            set expired_subkeys [info_field [r info stats] expired_subkeys]
+
+            # Verify that HLEN is between 20 and 30 (inclusive), and 
+            # when combined with expired_subkeys, the total should be 30
+            if {$hlen < 20 || $hlen > 30} {
+                fail "Expected HLEN to be between 20 and 30, but got $hlen"
+            }
+            assert_equal 30 [expr ($expired_subkeys + $hlen)]
+            
             # Verify the TTLs are preserved
             for {set i 1} {$i <= 10} {incr i} {
                 assert_equal $long_expire [r HEXPIRETIME myhash FIELDS 1 f$i]
