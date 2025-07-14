@@ -3124,19 +3124,16 @@ start_server {tags {"hashexpire external:skip"}} {
         r HSET myhash f1 v1 f2 v2 f3 v3
         assert_equal 3 [r HLEN myhash]
 
-        # Set very short expiry (1ms) and longer expiry (5000ms)
+        # Set very short expiry (1ms) and longer expiry (500s)
         r HPEXPIRE myhash 1 FIELDS 1 f1
-        r HPEXPIRE myhash 5000 FIELDS 1 f2
-        # f3 has no expiry
-        
+        # Wait for f1 to expire
         wait_for_active_expiry r myhash 2 $initial_expired 1
-        assert_equal "{} v2 v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
-
-        # Verify f2 and f3 still exist after short time
-        after 100
+        r HEXPIRE myhash 500 FIELDS 1 f2
+        # f3 has no expiry
+        # Verify f2 and f3 still exist
         assert_equal 2 [r HLEN myhash]
         assert_equal "{} v2 v3" [r HGETEX myhash FIELDS 3 f1 f2 f3]
-        assert_keyevent_patterns $rd myhash hset hexpire hexpire hexpired
+        assert_keyevent_patterns $rd myhash hset hexpire hexpired hexpire
     }
 
     test {Active expiry removes only specified fields leaving others intact} {
