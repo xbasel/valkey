@@ -801,19 +801,13 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
 
 static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
     robj *o = *(robj **)elemref;
-    serverAssert(o->type == OBJ_HASH);
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     serverAssert(hashTypeHasVolatileElements(o));
     vset *vset = hashTypeGetVolatileSet(o);
-    serverAssert(!vsetIsEmpty(vset));
 
-    defragKeysCtx *ctx = privdata;
-    UNUSED(ctx);
+    UNUSED(privdata);
 
-    // xbasel
-
-    // if (hashtableSize(o->ptr) > server.active_defrag_max_scan_fields) {
-    if (hashtableSize(o->ptr) > 1) {
+    if (hashtableSize(o->ptr) > 100) {
         defragLater(o);
     } else {
         size_t cursor = 0;
@@ -950,6 +944,12 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
     if (kvs != state.kvs) {
         // There has been a change of the kvs (flushdb, swapdb, etc.).  Just complete the stage.
+        if (defrag_later) {
+            // The kvstore was replaced, defrag_later are no longer relevant.
+            listRelease(defrag_later);
+            defrag_later = NULL;
+            defrag_later_cursor = 0;
+        }
         return DEFRAG_DONE;
     }
 
