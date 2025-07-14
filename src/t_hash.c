@@ -2239,7 +2239,7 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     } else {
         propagateFieldsDeletion(ctx.db, argv, argc);
         hashTypeIgnoreTTL(o, 0);
-        if (hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
+        if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
     }
     exitExecutionUnit();
     postExecutionUnitOperations();
