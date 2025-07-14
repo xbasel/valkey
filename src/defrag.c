@@ -807,7 +807,7 @@ static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
 
     UNUSED(privdata);
 
-    if (hashtableSize(o->ptr) > 100) {
+    if (hashtableSize(o->ptr) > server.active_defrag_max_scan_fields) {
         defragLater(o);
     } else {
         size_t cursor = 0;
