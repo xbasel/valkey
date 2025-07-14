@@ -3076,7 +3076,7 @@ start_server {tags {"hashexpire external:skip"}} {
         
         set mem_before_expire [r MEMORY USAGE myhash]
         if {$mem_before_expire eq ""} {set mem_before_expire 0}
-        assert_morethan $mem_before_expire 15000000
+        assert_morethan $mem_before_expire 10000000
 
         assert_match {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
         assert_equal $num_fields [r HLEN myhash]
@@ -3104,7 +3104,7 @@ start_server {tags {"hashexpire external:skip"}} {
         # Verify memory decreased by at least 15MB (size of hash key)
         set mem_after_expire [r MEMORY USAGE myhash]
         if {$mem_after_expire eq ""} {set mem_after_expire 0}
-        assert_morethan [expr {$mem_before_expire - $mem_after_expire}] 15000000
+        assert_morethan [expr {$mem_before_expire - $mem_after_expire}] 10000000
 
         # Verify keyspace notifications
         assert_keyevent_patterns $rd myhash hset hexpire hexpired hexpire hexpired

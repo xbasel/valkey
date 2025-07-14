@@ -207,8 +207,8 @@ static inline void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
-        it->db_cursor = 0;
     }
+    it->db_cursor = 0;
 }
 
 /* Returns the zero-based active expire effort level.
@@ -256,7 +256,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         size_t entries_processed = 0;
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
                                                            &iterations, start, time_limit_us, &now)) {
-            struct activeExpireHashContext ctx;
+            activeExpireHashContext ctx;
             ctx.it = it;
             ctx.now = now / 1000; // convert to ms
             ctx.entries_processed = 0;
@@ -267,7 +267,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 
             entries_processed += ctx.entries_processed;
 
-            if (it->db_cursor == 0) {
+            if (it->db_cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
                 advanceDb(it);
                 dbs_performed++;
                 break;
