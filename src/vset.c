@@ -502,6 +502,7 @@ static inline vsetBucket *vsetBucketFromVector(pVector *vec) {
 }
 
 static inline vsetBucket *vsetBucketFromHashtable(hashtable *ht) {
+    assert(ht != NULL);
     return vsetBucketFromRawPtr(ht, VSET_BUCKET_HT);
 }
 
@@ -1985,7 +1986,8 @@ static size_t vsetBucketDefrag_VECTOR(vsetBucket **bucket, size_t cursor, void *
 static size_t vsetBucketDefrag_HASHTABLE(vsetBucket **bucket, size_t cursor, void *(*defragfn)(void *)) {
     hashtable *ht = vsetBucketHashtable(*bucket);
     if (cursor == 0) {
-        ht = hashtableDefragTables(ht, defragfn);
+        hashtable *ht1= hashtableDefragTables(ht, defragfn);
+        if (ht1 != NULL) ht = ht1;
         *bucket = vsetBucketFromHashtable(ht);
     }
     return hashtableScanDefrag(ht, cursor, NULL, NULL, defragfn, 0);
