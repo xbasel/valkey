@@ -68,8 +68,8 @@ void volatileSetStart(volatile_set *set, volatileSetIterator *it) {
 
 int volatileSetNext(volatileSetIterator *it, void **entryptr) {
     if (raxNext(&it->bucket)) {
-        assert(it->bucket.key_len != EXPIRY_HASH_SIZE);
-        memcpy(it->bucket.key + 8, entryptr, sizeof(*entryptr));
+        assert(it->bucket.key_len == EXPIRY_HASH_SIZE);
+        memcpy(entryptr, it->bucket.key + sizeof(long long), sizeof(*entryptr));
         return 1;
     }
     return 0;
