@@ -96,7 +96,7 @@ entry *entrySetValue(entry *e, sds value) {
 }
 
 /* Returns the address of the entry allocation. */
-void *entryAllocPtr(const entry *entry) {
+void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entry);
     if (entryHasValuePtr(entry)) buf -= sizeof(sds);
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
@@ -114,12 +114,10 @@ bool entryHasEmbeddedValue(entry *entry) {
 long long entryGetExpiry(const entry *entry) {
     long long expiry = EXPIRY_NONE;
     if (entryHasExpiry(entry)) {
-        char *buf = sdsAllocPtr(entry);
+        char *buf = entryGetAllocPtr(entry);
         debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
                                                            * This is needed since we access the expiry as with pointer casting
                                                            * which require the access to be 8 bytes aligned. */
-        if (entryHasValuePtr(entry)) buf -= sizeof(sds);
-        buf -= sizeof(long long);
         expiry = *(long long *)buf;
     }
     return expiry;
@@ -128,12 +126,10 @@ long long entryGetExpiry(const entry *entry) {
 /* Modify the expiration time of this entry and return a pointer to the (potentially new) entry. */
 entry *entrySetExpiry(entry *e, long long expiry) {
     if (entryHasExpiry(e)) {
-        char *buf = sdsAllocPtr(e);
+        char *buf = entryGetAllocPtr(e);
         debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
                                                            * This is needed since we access the expiry as with pointer casting
                                                            * which require the access to be 8 bytes aligned. */
-        if (entryHasValuePtr(e)) buf -= sizeof(sds);
-        buf -= sizeof(expiry);
         *(long long *)buf = expiry;
         return e;
     }
@@ -151,25 +147,30 @@ void entryFree(entry *entry) {
     if (entryHasValuePtr(entry)) {
         sdsfree(entryGetValue(entry));
     }
-    zfree(entryAllocPtr(entry));
+    zfree(entryGetAllocPtr(entry));
 }
 
-/* Takes ownership of value. does not take ownership of field */
-entry *entryCreate(const_sds field, sds value, long long expiry) {
-    sds embedded_field_sds;
-    size_t expiry_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
+static inline size_t entryReqSize(const_sds field,
+                                  sds value,
+                                  long long expiry,
+                                  bool *is_value_embedded,
+                                  int *field_sds_type,
+                                  size_t *field_size,
+                                  size_t *expiry_size,
+                                  size_t *embedded_value_size) {
+    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
     size_t field_len = sdslen(field);
-    int field_sds_type = sdsReqType(field_len);
-    if (field_sds_type == SDS_TYPE_5 && (expiry_size > 0)) {
-        field_sds_type = SDS_TYPE_8;
+    int embedded_field_sds_type = sdsReqType(field_len);
+    if (embedded_field_sds_type == SDS_TYPE_5 && (expiry_alloc_size > 0)) {
+        embedded_field_sds_type = SDS_TYPE_8;
     }
-    size_t field_size = sdsReqSize(field_len, field_sds_type);
+    size_t field_alloc_size = sdsReqSize(field_len, embedded_field_sds_type);
     size_t value_len = value ? sdslen(value) : 0;
-    size_t embedded_value_size = value ? sdsReqSize(value_len, SDS_TYPE_8) : 0;
-    size_t alloc_size = field_size + expiry_size;
+    size_t embedded_value_alloc_size = value ? sdsReqSize(value_len, SDS_TYPE_8) : 0;
+    size_t alloc_size = field_alloc_size + expiry_alloc_size;
     bool embed_value = false;
     if (value) {
-        if (alloc_size + embedded_value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+        if (alloc_size + embedded_value_alloc_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
             /* Embed field and value. Value is fixed to SDS_TYPE_8. Unused
              * allocation space is recorded in the embedded value's SDS header.
              *
@@ -179,7 +180,7 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
              *     +------+--------------+---------------+
              */
             embed_value = true;
-            alloc_size += embedded_value_size;
+            alloc_size += embedded_value_alloc_size;
         } else {
             /* Embed field, but not value. Field must be >= SDS_TYPE_8 to encode to
              * indicate this type of entry.
@@ -191,21 +192,37 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
              */
             embed_value = false;
             alloc_size += sizeof(sds);
-            if (field_sds_type == SDS_TYPE_5) {
-                field_sds_type = SDS_TYPE_8;
-                alloc_size -= field_size;
-                field_size = sdsReqSize(field_len, field_sds_type);
-                alloc_size += field_size;
+            if (embedded_field_sds_type == SDS_TYPE_5) {
+                embedded_field_sds_type = SDS_TYPE_8;
+                alloc_size -= field_alloc_size;
+                field_alloc_size = sdsReqSize(field_len, embedded_field_sds_type);
+                alloc_size += field_alloc_size;
             }
         }
     }
-    /* allocate the buffer */
+    if (expiry_size) *expiry_size = expiry_alloc_size;
+    if (field_sds_type) *field_sds_type = embedded_field_sds_type;
+    if (field_size) *field_size = field_alloc_size;
+    if (embedded_value_size) *embedded_value_size = embedded_value_alloc_size;
+    if (is_value_embedded) *is_value_embedded = embed_value;
+
+    return alloc_size;
+}
+
+/* Takes ownership of value. does not take ownership of field */
+entry *entryCreate(const_sds field, sds value, long long expiry) {
+    bool embed_value = false;
+    int embedded_field_sds_type;
+    size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
+    size_t alloc_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_sds_size, &expiry_size, &embedded_value_sds_size);
     size_t buf_size;
+
+    /* allocate the buffer */
     char *buf = zmalloc_usable(alloc_size, &buf_size);
 
     /* Set The expiry if exists */
     if (expiry_size) {
-        memcpy(buf, &expiry, expiry_size);
+        *(long long *)buf = expiry;
         buf += expiry_size;
         buf_size -= expiry_size;
     }
@@ -215,60 +232,64 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
             buf += sizeof(sds);
             buf_size -= sizeof(sds);
         } else {
-            sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
+            sdswrite(buf + embedded_field_sds_size, buf_size - embedded_field_sds_size, SDS_TYPE_8, value, sdslen(value));
             sdsfree(value);
-            buf_size -= embedded_value_size;
+            buf_size -= embedded_value_sds_size;
         }
     }
     /* Set the field data */
-    embedded_field_sds = sdswrite(buf, field_size, field_sds_type, field, field_len);
+    entry *new_entry = sdswrite(buf, embedded_field_sds_size, embedded_field_sds_type, field, sdslen(field));
 
     /* Field sds aux bits are zero, which we use for this entry encoding. */
-    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, embed_value ? 0 : 1);
-    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry_size > 0 ? 1 : 0);
-    return (void *)embedded_field_sds;
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, embed_value ? 0 : 1);
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry_size > 0 ? 1 : 0);
+
+    /* Check that the new entry was built correctly */
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
+    return new_entry;
 }
 
 /* Modify the entry's value and/or expiration time.
  * In case the provided value is NULL, will use the existing value. */
 entry *entryUpdate(entry *e, sds value, long long expiry) {
     sds field = (sds)e;
+    entry *new_entry = NULL;
 
     bool update_value = value ? true : false;
-    long long expiration_time = entryGetExpiry(e);
-    bool update_expiry = (expiry != expiration_time) ? true : false;
+    long long curr_expiration_time = entryGetExpiry(e);
+    bool update_expiry = (expiry != curr_expiration_time) ? true : false;
+    /* Just a sanity check. If nothing changes, lets just return */
     if (!update_value && !update_expiry)
         return e;
-    expiration_time = expiry;
-    value = update_value ? value : entryGetValue(e);
-    size_t expiry_size = (expiration_time != EXPIRY_NONE) ? sizeof(expiration_time) : 0;
-    int field_sds_type = sdsReqType(sdslen(field));
-    if (field_sds_type == SDS_TYPE_5 && (expiry_size > 0)) {
-        field_sds_type = SDS_TYPE_8;
-    }
-    size_t field_size = sdsHdrSize(field_sds_type) + sdsalloc(field) + 1;
-    size_t value_len = value ? sdslen(value) : 0;
-    size_t embedded_value_size = value ? sdsReqSize(value_len, SDS_TYPE_8) : 0;
 
-    size_t required_embedded_size = field_size + embedded_value_size + expiry_size;
+    if (!value) value = entryGetValue(e);
+    bool embed_value = false;
+    int embedded_field_sds_type;
+    size_t expiry_size, embedded_value_size, embedded_field_size;
+    size_t required_embedded_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_size, &expiry_size, &embedded_value_size);
     size_t current_embedded_allocation_size = entryHasValuePtr(e) ? 0 : entryMemUsage(e);
+
+    bool expiry_add_remove = update_expiry && (curr_expiration_time == EXPIRY_NONE || expiry == EXPIRY_NONE); // In case we are toggling expiration
+    bool value_change_encoding = update_value && (embed_value != !entryHasValuePtr(e));                       // In case we change the way value is embedded or not
+
+
     /* // We will create a new entry in the following cases:
      * 1. In the case were we add or remove expiration.
-     * 2. in the case were we are NOT migrating from an embedded entry to an embedded entry with ~the same size. */
-    bool create_new_entry = (update_expiry && (entryGetExpiry(e) == EXPIRY_NONE || expiration_time == EXPIRY_NONE)) ||
-                            !(update_value && !entryHasValuePtr(e) &&
-                              required_embedded_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
-                              required_embedded_size <= current_embedded_allocation_size &&
-                              required_embedded_size >= current_embedded_allocation_size * 3 / 4);
+     * 2. We change the way value is encoded
+     * 3. in the case were we are NOT migrating from an embedded entry to an embedded entry with ~the same size. */
+    bool create_new_entry = (expiry_add_remove) || (value_change_encoding) ||
+                            (update_value && !entryHasValuePtr(e) &&
+                             !(required_embedded_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
+                               required_embedded_size <= current_embedded_allocation_size &&
+                               required_embedded_size >= current_embedded_allocation_size * 3 / 4));
 
     if (!create_new_entry) {
         /* In this case we are sure we do not have to allocate new entry, so expiry must already be set. */
         if (update_expiry) {
             serverAssert(entryHasExpiry(e));
-            char *buf = sdsAllocPtr(e);
-            if (entryHasValuePtr(e)) buf -= sizeof(sds);
-            buf -= sizeof(expiry);
-            memcpy(buf, &expiry, sizeof(expiry));
+            char *buf = entryGetAllocPtr(e);
+            *(long long *)buf = expiry;
         }
         /* In this case we are sure we do not have to allocate new entry, so value must already be set or we have enough room to embed it. */
         if (update_value) {
@@ -288,7 +309,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
                 sdsfree(value);
             }
         }
-        return e;
+        new_entry = e;
 
     } else {
         if (!update_value) {
@@ -303,11 +324,14 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
                 *value_ref = NULL;
             }
         }
+        new_entry = entryCreate(entryGetField(e), value, expiry);
+        debugServerAssert(new_entry != e);
+        entryFree(e);
     }
-
-    entry *new_entry = entryCreate(entryGetField(e), value, expiration_time);
-    debugServerAssert(new_entry != e);
-    entryFree(e);
+    /* Check that the new entry was built correctly */
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
+    serverAssert(new_entry);
     return new_entry;
 }
 
@@ -319,7 +343,7 @@ size_t entryMemUsage(entry *entry) {
     if (entryHasValuePtr(entry)) {
         /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
          * header could be too small for holding the real allocation size. */
-        mem += zmalloc_usable_size(entryAllocPtr(entry));
+        mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     } else {
         mem += sdsReqSize(sdslen(entry), sdsType(entry));
         if (entryHasExpiry(entry)) mem += sizeof(long long);
@@ -341,7 +365,7 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
         sds new_value = sdsdefragfn(*value_ref);
         if (new_value) *value_ref = new_value;
     }
-    char *allocation = entryAllocPtr(entry);
+    char *allocation = entryGetAllocPtr(entry);
     char *new_allocation = defragfn(allocation);
     if (new_allocation != NULL) {
         /* Return the same offset into the new allocation as the entry's offset
