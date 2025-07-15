@@ -6323,7 +6323,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             keysvitems = kvstoreSize(db->keys_with_volatile_items);
 
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,subexpiry=%lld\r\n", j, keys, vkeys,
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
                                     db->avg_ttl, keysvitems);
             }
         }
