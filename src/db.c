@@ -218,6 +218,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
     /* Track hash object if it has volatile fields for active expiry. */
+    // TODO Consider depricating dbTrackKeyWithVolaItemsIfNeeded, not sure tracking here is needed (hashTypeTrackEntry)
     dbTrackKeyWithVolaItemsIfNeeded(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
@@ -520,6 +521,7 @@ void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
 
 /**
  * Checks if the object is a hash object without volatile items and removes it from the hash field expiry kvstore
+ * @Deprecated (remove this function after making sure its safe to)
  */
 void dbUnTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && !hashTypeHasVolatileElements(o)) {

@@ -322,7 +322,6 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
      * expired keys to use memory for too much time. */
     if (dbs_per_call > server.dbnum || timelimit_exit) dbs_per_call = server.dbnum;
 
-
     timelimit_exit = 0;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit = config_cycle_fast_duration; /* in microseconds. */
@@ -514,7 +513,7 @@ typedef void expiryDriver(int type, unsigned long entries_per_loop, long long ti
  * fully consuming their available time budget.
  *
  * Note that field expiry is only performed during the slow iteration cycles,
- * as it is not scheduled to run in the fast cycle.
+ * TODO: Consider scheduling field expiry to run in the fast cycle.
  */
 void activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
