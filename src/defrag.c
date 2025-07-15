@@ -460,7 +460,6 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
             defragObjectCtx *ctx = privdata;
             serverAssert(ctx && ctx->db && ctx->o);
             hashTypeTrackUpdateEntry(ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
-            dbUntrackKeyWithVolaItems(ctx->db, ctx->o);
         }
         *entry_ref = new_entry;
     }
