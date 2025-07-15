@@ -3364,16 +3364,16 @@ robj *setTypeDup(robj *o);
 
 int dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 void hashTypeFreeVolatileSet(robj *o);
-void hashTypeTrackEntry(robj *o, void *entry);
-void hashTypeUntrackEntry(robj *o, void *entry);
-void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
+void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
+void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 vset *hashTypeGetVolatileSet(robj *o);
 size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
 int hashTypeExists(robj *o, sds key);
-int hashTypeDelete(robj *o, sds key);
+int hashTypeDelete(serverDb *db, robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
@@ -3388,7 +3388,7 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
+int hashTypeSet(serverDb *db, robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileElements(robj *o);
 

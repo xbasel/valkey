@@ -459,7 +459,7 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
         if (entryHasExpiry(new_entry)) {
             defragObjectCtx *ctx = privdata;
             serverAssert(ctx && ctx->db && ctx->o);
-            hashTypeTrackUpdateEntry(ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            hashTypeTrackUpdateEntry(ctx->db, ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;
     }
