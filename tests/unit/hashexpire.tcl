@@ -2720,7 +2720,6 @@ tags {"aof external:skip"} {
             }
 
             # Verify initial HLEN
-            puts [r HLEN myhash]
             assert_equal 30 [r HLEN myhash]
             # Verify values
             for {set i 1} {$i <= 40} {incr i} {
@@ -2768,7 +2767,7 @@ tags {"aof external:skip"} {
                 fail "Expected HLEN to be between 20 and 30, but got $hlen"
             }
             assert_equal 30 [expr ($expired_subkeys + $hlen)]
-            
+
             # Verify the TTLs are preserved
             for {set i 1} {$i <= 10} {incr i} {
                 assert_equal $long_expire [r HEXPIRETIME myhash FIELDS 1 f$i]
