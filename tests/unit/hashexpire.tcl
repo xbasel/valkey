@@ -2832,6 +2832,17 @@ start_server {tags {"hashexpire external:skip"}} {
             wait_for_active_expiry r myhash 0 $initial_expired 1
             assert_equal 0 [r EXISTS myhash]
         }
+
+        test "HGETEX $command and HPEXPIRE" {
+            r FLUSHALL
+            r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
+            r HEXPIRE myhash 3000 FIELDS 1 f1
+            r HSETEX myhash EX 5000 FIELDS 1 f2 v2
+            r HEXPIRE myhash 60000 FIELDS 1 f3
+            assert_equal "v1 v2 v3 v4" [r HGETEX myhash FIELDS 4 f1 f2 f3 f4]
+            assert_equal "v3" [r HGETEX myhash PERSIST FIELDS 1 f3]
+            r HPEXPIRE myhash 1 FIELDS 1 f1
+        }
     }
 
     test "HGETEX PERSIST removes expiry and prevents active expiry" {
@@ -2954,6 +2965,12 @@ start_server {tags {"hashexpire external:skip"}} {
             r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
             wait_for_active_expiry r myhash 0 $initial_expired 1
             assert_equal 0 [r EXISTS myhash]
+        }
+
+        test "HSETEX $command after HSETEX $command" {
+            r FLUSHALL
+            r HSETEX myhash EX 1000000000 FIELDS 1 f1 v1
+            r HSETEX myhash PX 10 FIELDS 1 f2 v2
         }
     }
 
