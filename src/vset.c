@@ -1979,16 +1979,20 @@ static size_t vsetBucketDefrag_VECTOR(vsetBucket **bucket, size_t cursor, void *
     UNUSED(cursor);
     pVector *pv = vsetBucketVector(*bucket);
     pv = defragfn(pv);
-    *bucket = vsetBucketFromVector(pv);
+    if (pv)
+        *bucket = vsetBucketFromVector(pv);
     return 0;
 }
 
 static size_t vsetBucketDefrag_HASHTABLE(vsetBucket **bucket, size_t cursor, void *(*defragfn)(void *)) {
     hashtable *ht = vsetBucketHashtable(*bucket);
     if (cursor == 0) {
-        hashtable *ht1= hashtableDefragTables(ht, defragfn);
-        if (ht1 != NULL) ht = ht1;
-        *bucket = vsetBucketFromHashtable(ht);
+        /* First time we enter this hashtable, defrag the tables first. */
+        hashtable *new_ht = hashtableDefragTables(ht, defragfn);
+        if (new_ht) {
+            ht = new_ht;
+            *bucket = vsetBucketFromHashtable(ht);
+        }
     }
     return hashtableScanDefrag(ht, cursor, NULL, NULL, defragfn, 0);
 }
