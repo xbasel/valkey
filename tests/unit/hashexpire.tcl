@@ -3108,7 +3108,7 @@ start_server {tags {"hashexpire external:skip"}} {
         }
         r HPEXPIRE myhash 100 FIELDS [expr {$num_fields - 1}] {*}$all_field_names
         
-        wait_for_active_expiry r myhash 0 $initial_expired $num_fields
+        wait_for_active_expiry r myhash 0 $initial_expired $num_fields 350 100
 
         # Verify memory decreased by at least 15MB (size of hash key)
         set mem_after_expire [r MEMORY USAGE myhash]
@@ -3467,7 +3467,7 @@ start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}
         R 1 HPEXPIRE $key 100 FIELDS 100 {*}$fields
         
         # Verify active expiry
-        wait_for_condition 200 50 {
+        wait_for_condition 100 100 {
             [R 1 HLEN $key] eq 0 &&
             [info_field [R 1 info stats] expired_subkeys] eq [expr {$initial_expired + 75}]
         } else {
