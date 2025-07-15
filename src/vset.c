@@ -1587,12 +1587,12 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
     UNUSED(new_expiry);
 
     hashtable *ht = vsetBucketHashtable(bucket);
-    if (hashtableDelete(ht, old_entry)) {
-        hashtableAdd(ht, new_entry);
-    }else {
+    void **ref = hashtableFindRef(ht, old_entry);
+    if (!ref) {
         return vsetBucketFromNone();
+    } else {
+        *ref = new_entry;
     }
-
     return bucket;
 }
 
