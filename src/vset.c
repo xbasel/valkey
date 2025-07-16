@@ -1586,11 +1586,21 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
     UNUSED(old_expiry);
     UNUSED(new_expiry);
 
+    /* In this case no need to change anything. */
+    if (old_entry == new_entry)
+        return bucket;
+
+    hashtablePosition pos;
     hashtable *ht = vsetBucketHashtable(bucket);
-    if (hashtableDelete(ht, old_entry)) {
-        hashtableAdd(ht, new_entry);
-    }else {
+    /* We do a two stage pop in order to avoid rehashing. */
+    void **ref = hashtableTwoPhasePopFindRef(ht, old_entry, &pos);
+    if (!ref) {
+        /* In case no entry found, the rehashing did not pause, so it is safe to return. */
         return vsetBucketFromNone();
+    } else {
+        /* We know for sure the two entries are not the same, so it is safe to add the new and remove the old */
+        assert(hashtableAdd(ht, new_entry));
+        hashtableTwoPhasePopDelete(ht, &pos);
     }
 
     return bucket;
