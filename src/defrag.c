@@ -739,7 +739,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         }
         ob = newob;
     }
-    if (trackHash) {
+    if (key_with_volatile_items) {
         dbTrackKeyWithVolaItems(db, ob);
     }
 
