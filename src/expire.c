@@ -151,8 +151,6 @@ void expireScanCallback(void *privdata, void *entry) {
     data->sampled++;
 }
 
-int hashTypeExpireEntry(void *db, void *o, void *entry);
-
 /* Callback used during hash field expiry kvstore scan to process a hash key with volatile fields.
  * Validates that the key has volatile elements, then processes it for active expiration.
  * Expires up to ctx->batch_Size fields per call.

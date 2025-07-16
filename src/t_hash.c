@@ -134,7 +134,7 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
         hashTypeFreeVolatileSet(o);
         // It is tracked only if o had vola items
         if (db && has_vola) dbUntrackKeyWithVolaItems(db, o);
-    }else {
+    } else {
         // o had no vola items and we should track now.
         if (db && !has_vola) dbTrackKeyWithVolaItems(db, o);
     }
@@ -437,7 +437,7 @@ int hashTypeSet(serverDb *db, robj *o, sds field, sds value, long long expiry, i
  * returns 1 if the expiration time was applied.
  * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired.
  */
-int hashTypeSetExpire(serverDb * db, robj *o, sds field, long long expiry, int flag) {
+int hashTypeSetExpire(serverDb *db, robj *o, sds field, long long expiry, int flag) {
     /* If no object we will return -2 */
     if (o == NULL) return -2;
 
