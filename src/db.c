@@ -217,8 +217,8 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
-    /* Track hash object if it has volatile fields for active expiry. */
-    // TODO Consider depricating dbTrackKeyWithVolaItemsIfNeeded, not sure tracking here is needed (hashTypeTrackEntry)
+    /* Track hash object if it has volatile fields (for active expiry).
+     * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
     dbTrackKeyWithVolaItemsIfNeeded(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
