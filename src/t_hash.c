@@ -1625,7 +1625,6 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (checkType(c, obj, OBJ_HASH)) {
         return;
     }
-
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
