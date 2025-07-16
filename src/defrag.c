@@ -725,7 +725,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     /* Try to defrag robj and/or string value. */
     /* Also untrack hash, and track it again with the new reference */
     bool key_with_volatile_items = ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(ob);
-    if (trackHash) {
+    if (key_with_volatile_items) {
         dbUntrackKeyWithVolaItems(db, ob);
     }
     if ((newob = activeDefragStringOb(ob))) {
