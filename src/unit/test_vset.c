@@ -20,17 +20,19 @@ static mock_entry *mockCreateEntry(const char *keystr, long long expiry) {
     return e;
 }
 
+static void mockFreeEntry(void *entry) {
+    // printf("mockFreeEntry: %p\n", entry);
+    entryFree(entry);
+}
+
 static mock_entry *mockEntryUpdate(mock_entry *entry, long long expiry) {
-    return entryUpdate(entry, NULL, expiry);
+    mock_entry *new_entry = entryCreate(entryGetField(entry), sdsdup(entryGetValue(entry)), expiry);
+    entryFree(entry);
+    return new_entry;
 }
 
 static long long mockGetExpiry(const void *entry) {
     return entryGetExpiry(entry);
-}
-
-static void mockFreeEntry(void *entry) {
-    // printf("mockFreeEntry: %p\n", entry);
-    entryFree(entry);
 }
 
 int test_vset_add_and_iterate(int argc, char **argv, int flags) {
@@ -117,6 +119,99 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
     zfree(entries);
 
     TEST_PRINT_INFO("Inserted and iterated %d entries with same expiry", total_entries);
+    return 0;
+}
+
+int test_vset_large_batch_update_entry_same_expiry(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+
+    vset set;
+    vsetInit(&set);
+
+    const long long expiry_time = 1000LL;
+    const unsigned int total_entries = 1000;
+
+    mock_entry *entries[total_entries];
+
+    for (unsigned int i = 0; i < total_entries; i++) {
+        char key_buf[32];
+        snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
+        entries[i] = mockCreateEntry(key_buf, expiry_time);
+        TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+    }
+    // Verify set is not empty
+    TEST_ASSERT(!vsetIsEmpty(&set));
+
+    // Now iterate and replace all entries
+    for (unsigned int i = 0; i < total_entries; i++) {
+        mock_entry *old_entry = entries[i];
+        entries[i] = mockEntryUpdate(entries[i], expiry_time);
+        TEST_ASSERT(vsetUpdateEntry(&set, mockGetExpiry, old_entry, entries[i], expiry_time, expiry_time));
+    }
+
+    for (unsigned int i = 0; i < total_entries; i++) {
+        TEST_ASSERT(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+    }
+
+    // Verify set is empty
+    TEST_ASSERT(vsetIsEmpty(&set));
+
+    // Cleanup
+    for (unsigned int i = 0; i < total_entries; i++) {
+        mockFreeEntry(entries[i]);
+    }
+
+    TEST_PRINT_INFO("Inserted, updated and deleted %d entries with same expiry", total_entries);
+    return 0;
+}
+
+int test_vset_large_batch_update_entry_multiple_expiries(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+    const unsigned int total_entries = 1000;
+
+    vset set;
+    vsetInit(&set);
+
+    // Prepare entries with mixed expiry times, some duplicates
+    mock_entry *entries[total_entries];
+
+    // Initialize keys
+    for (unsigned int i = 0; i < total_entries; i++) {
+        char key_buf[32];
+        snprintf(key_buf, sizeof(key_buf), "entry_%d", i);
+        long long expiry_time = rand() % 10000;
+        entries[i] = mockCreateEntry(key_buf, expiry_time);
+        TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+    }
+    // Verify set is not empty
+    TEST_ASSERT(!vsetIsEmpty(&set));
+
+    // Now iterate and replace all entries
+    for (unsigned int i = 0; i < total_entries; i++) {
+        mock_entry *old_entry = entries[i];
+        long long old_expiry = entryGetExpiry(entries[i]);
+        long long new_expiry = old_expiry + rand() % 100000;
+        entries[i] = mockEntryUpdate(entries[i], new_expiry);
+        TEST_ASSERT(vsetUpdateEntry(&set, mockGetExpiry, old_entry, entries[i], old_expiry, new_expiry));
+    }
+
+    for (unsigned int i = 0; i < total_entries; i++) {
+        TEST_ASSERT(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+    }
+
+    // Verify set is empty
+    TEST_ASSERT(vsetIsEmpty(&set));
+
+    // Cleanup
+    for (unsigned int i = 0; i < total_entries; i++) {
+        mockFreeEntry(entries[i]);
+    }
+
+    TEST_PRINT_INFO("Inserted, updated and deleted %d entries with different expiry", total_entries);
     return 0;
 }
 
