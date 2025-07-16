@@ -2083,7 +2083,7 @@ typedef struct {
 } expiryContext;
 
 /* Add an entry to the expiryContext list of processed entries. */
-static void ctxAddEntry(expiryContext *ctx, void *e) {
+static inline void ctxAddEntry(expiryContext *ctx, void *e) {
     ctx->entries[ctx->n_entries++] = e;
 }
 
