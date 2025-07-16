@@ -1695,12 +1695,14 @@ int dbSwapDatabases(int id1, int id2) {
      * remain in the same DB they were. */
     db1->keys = db2->keys;
     db1->expires = db2->expires;
+    db1->keys_with_volatile_items = db2->keys_with_volatile_items;
     db1->avg_ttl = db2->avg_ttl;
     db1->expires_cursor = db2->expires_cursor;
     db1->keys_with_volatile_items_cursor = db2->keys_with_volatile_items_cursor;
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
+    db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     db2->avg_ttl = aux.avg_ttl;
     db2->expires_cursor = aux.expires_cursor;
     db2->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
@@ -1742,12 +1744,14 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
          * remain in the same DB they were. */
         activedb->keys = newdb->keys;
         activedb->expires = newdb->expires;
+        activedb->keys_with_volatile_items = newdb->keys_with_volatile_items;
         activedb->avg_ttl = newdb->avg_ttl;
         activedb->expires_cursor = newdb->expires_cursor;
         activedb->keys_with_volatile_items_cursor = newdb->keys_with_volatile_items_cursor;
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
+        newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
         newdb->avg_ttl = aux.avg_ttl;
         newdb->expires_cursor = aux.expires_cursor;
         newdb->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
