@@ -2185,12 +2185,12 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
 
     expiryContext ctx = {.db = db, .key = o, .entries = entries, .n_entries = 0};
 
+    // TODO optmize with vsetEstimatedEarliestExpiry
     /* Pop expired fields from the volatile set. */
     size_t expired = vsetPopExpired(vset, entryGetExpiry, expireEntry, now, max_entries, &ctx);
 
     serverAssert(ctx.n_entries <= max_entries);
 
-    /* If no fields expired, restore normal TTL behavior and exit. */
     if (expired == 0) {
         hashTypeIgnoreTTL(o, 0);
         goto cleanup;
@@ -2211,7 +2211,6 @@ size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned
     enterExecutionUnit(1, 0);
     if (deleteKey) {
         robj *keyobj = argv[1]; // keyobj from buildExpireFieldsArgv
-        // dbUntrackKeyWithVolaItems(db, o);
         dbDelete(db, keyobj);
         propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
         notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
