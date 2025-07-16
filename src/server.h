@@ -871,7 +871,8 @@ typedef struct serverDb {
     dict *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
     int id;                               /* Database ID */
     long long avg_ttl;                    /* Average TTL, just for stats */
-    unsigned long expires_cursor;         /* Cursor of the active expire cycle. */
+    unsigned long expires_cursor;         /* Cursor of the keys active expire cycle. */
+    unsigned long keys_with_volatile_items_cursor ;  /* Cursor for keys with volatile items (field-level TTL) */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1619,20 +1620,6 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
 
-
-typedef struct activeExpireFieldIterator {
-    int current_db;
-    unsigned long long db_cursor;
-} activeExpireFieldIterator;
-
-typedef struct activeExpireHashContext {
-    activeExpireFieldIterator *it;
-    mstime_t now;
-    size_t batch_Size;
-    size_t entries_processed;
-} activeExpireHashContext;
-
-
 struct valkeyServer {
     /* General */
     pid_t pid;                /* Main process pid. */
@@ -2234,9 +2221,6 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
-
-    /* has field expiry */
-    activeExpireFieldIterator active_expire_field_iterator;
 };
 
 #define MAX_KEYS_BUFFER 256

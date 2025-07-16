@@ -124,7 +124,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now) {
 #define ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE 10 /* % of stale keys after which \
                                                    we do extra efforts. */
 
-/* Data used by the expire dict scan callback. */
+/* Data used by the key expire kvstore scan callback. */
 typedef struct {
     serverDb *db;
     long long now;
@@ -133,6 +133,17 @@ typedef struct {
     long long ttl_sum;     /* sum of ttl for key with ttl not yet expired */
     int ttl_samples;       /* num keys with ttl not yet expired */
 } expireScanData;
+
+typedef struct activeExpireFieldIterator {
+    int current_db;
+} activeExpireFieldIterator;
+
+typedef struct activeExpireHashContext {
+    activeExpireFieldIterator *it;
+    mstime_t now;
+    size_t batch_Size;
+    size_t entries_processed;
+} activeExpireHashContext;
 
 void expireScanCallback(void *privdata, void *entry) {
     robj *val = entry;
@@ -197,16 +208,16 @@ static inline int activeExpireFieldsCheckTimeLimitReached(
 
 /* Advance to the next DB in the active expire field iterator.
  *
- * If the last DB was reached, wrap around to DB 0 and reset the scan cursor.
- * Also clears the current key to start fresh in the next cycle.
+ * If the last DB was reached, wrap around to DB 0.
  */
 
 static inline void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
+        serverDb *db = server.db[it->current_db];
+        if (db != NULL) db->keys_with_volatile_items_cursor = 0;
     }
-    it->db_cursor = 0;
 }
 
 /* Returns the zero-based active expire effort level.
@@ -239,34 +250,36 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
     unsigned int iterations = 0;
     uint64_t start = ustime();
     uint64_t now = start;
-    activeExpireFieldIterator *it = &server.active_expire_field_iterator;
+    static activeExpireFieldIterator it = {.current_db = 0};
     int dbs_performed = 0;
 
     while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
-                                                    &iterations, start, time_limit_us, &now)) {
-        serverDb *db = server.db[it->current_db];
+               &iterations, start, time_limit_us, &now)) {
+        serverDb *db = server.db[it.current_db];
         if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
-            advanceDb(it);
+            advanceDb(&it);
             dbs_performed++;
             continue;
         }
 
         size_t entries_processed = 0;
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
-                                                           &iterations, start, time_limit_us, &now)) {
+                   &iterations, start, time_limit_us, &now)) {
             activeExpireHashContext ctx;
-            ctx.it = it;
+            ctx.it = &it;
             ctx.now = now / 1000; // convert to ms
             ctx.entries_processed = 0;
             ctx.batch_Size = entries_per_call;
 
-            it->db_cursor = kvstoreScan(db->keys_with_volatile_items, it->db_cursor, -1, fieldExpireScanCallback,
-                                        isExpiryTableValidForSamplingCb, &ctx);
+            db->keys_with_volatile_items_cursor = kvstoreScan(db->keys_with_volatile_items,
+                                                              db->keys_with_volatile_items_cursor, -1,
+                                                              fieldExpireScanCallback,
+                                                              isExpiryTableValidForSamplingCb, &ctx);
 
             entries_processed += ctx.entries_processed;
 
-            if (it->db_cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
-                advanceDb(it);
+            if (db->keys_with_volatile_items_cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
+                advanceDb(&it);
                 dbs_performed++;
                 break;
             }

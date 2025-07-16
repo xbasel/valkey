@@ -629,9 +629,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j]->avg_ttl = 0;
         dbarray[j]->expires_cursor = 0;
-        if (server.active_expire_field_iterator.current_db == j) {
-            server.active_expire_field_iterator.db_cursor = 0;
-        }
+        dbarray[j]->keys_with_volatile_items_cursor = 0;
     }
 
     return removed;
@@ -1678,10 +1676,6 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    if (server.active_expire_field_iterator.current_db == id1 || server.active_expire_field_iterator.current_db ==
-                                                                     id2) {
-        server.active_expire_field_iterator.db_cursor = 0;
-    }
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
     serverDb aux = *db1;
@@ -1702,11 +1696,13 @@ int dbSwapDatabases(int id1, int id2) {
     db1->expires = db2->expires;
     db1->avg_ttl = db2->avg_ttl;
     db1->expires_cursor = db2->expires_cursor;
+    db1->keys_with_volatile_items_cursor = db2->keys_with_volatile_items_cursor;
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
     db2->avg_ttl = aux.avg_ttl;
     db2->expires_cursor = aux.expires_cursor;
+    db2->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1747,11 +1743,13 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         activedb->expires = newdb->expires;
         activedb->avg_ttl = newdb->avg_ttl;
         activedb->expires_cursor = newdb->expires_cursor;
+        activedb->keys_with_volatile_items_cursor = newdb->keys_with_volatile_items_cursor;
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
         newdb->avg_ttl = aux.avg_ttl;
         newdb->expires_cursor = aux.expires_cursor;
+        newdb->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
@@ -1765,7 +1763,6 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         scanDatabaseForReadyKeys(activedb);
     }
 
-    server.active_expire_field_iterator.db_cursor = 0;
     trackingInvalidateKeysOnFlush(1);
     flushReplicaKeysWithExpireList();
 }
