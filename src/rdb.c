@@ -3392,7 +3392,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 val = setExpire(NULL, db, &keyobj, expiretime);
             }
 
-            dbTrackKeyWithVolaItemsIfNeeded(db, val);
+            /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
+            dbTrackKeyWithVolatileItemsIfNeeded(db, val);
 
             /* Set usage information (for eviction). */
             objectSetLRUOrLFU(val, lfu_freq, lru_idle, lru_clock, 1000);

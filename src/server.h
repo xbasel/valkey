@@ -318,11 +318,6 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 /* Key flags for when access type is unknown */
 #define CMD_KEY_FULL_ACCESS (CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE)
 
-#define EXPIRE_NX (1 << 0)
-#define EXPIRE_XX (1 << 1)
-#define EXPIRE_GT (1 << 2)
-#define EXPIRE_LT (1 << 3)
-
 /* Key flags for how key is removed */
 #define DB_FLAG_KEY_NONE 0
 #define DB_FLAG_KEY_DELETED (1ULL << 0)
@@ -3551,7 +3546,7 @@ void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
 int dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
 int dbTrackKeyWithVolaItems(serverDb *db, robj *o);
-void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o);
+void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

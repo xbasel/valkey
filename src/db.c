@@ -219,7 +219,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     val = objectSetKeyAndExpire(val, key->ptr, -1);
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
-    dbTrackKeyWithVolaItemsIfNeeded(db, val);
+    dbTrackKeyWithVolatileItemsIfNeeded(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -510,7 +510,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 }
 
 /* Checks if the object is a hash object with volatile items and adds it to the hash field expiry kvstore */
-void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
+void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(o)) {
         dbTrackKeyWithVolaItems(db, o);
     }
@@ -585,6 +585,19 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     return o;
 }
 
+/*
+ * Reset active expiry state for a database.
+ * This includes the average TTL and the cursors used for incremental
+ * expiry of both key-level and field-level TTLs.
+ * Should be called when the database is fully cleared (e.g. FLUSHDB).
+ */
+void resetExpiryCycle(serverDb *db) {
+    /* All keys removed: reset TTL stats and active expiry cursors */
+    db->avg_ttl = 0;
+    db->expires_cursor = 0;
+    db->keys_with_volatile_items_cursor = 0;
+}
+
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
@@ -613,10 +626,9 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
             kvstoreEmpty(dbarray[j]->expires, callback);
             kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
-        /* Because all keys of database are removed, reset average ttl. */
-        dbarray[j]->avg_ttl = 0;
-        dbarray[j]->expires_cursor = 0;
-        dbarray[j]->keys_with_volatile_items_cursor = 0;
+
+        /* Because all keys of database are removed, reset average ttl and cursors. */
+        resetExpiryCycle(dbarray[j]);
     }
 
     return removed;
