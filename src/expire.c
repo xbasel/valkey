@@ -254,7 +254,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
     int dbs_performed = 0;
 
     while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
-               &iterations, start, time_limit_us, &now)) {
+                                                    &iterations, start, time_limit_us, &now)) {
         serverDb *db = server.db[it.current_db];
         if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
             advanceDb(&it);
@@ -264,7 +264,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 
         size_t entries_processed = 0;
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
-                   &iterations, start, time_limit_us, &now)) {
+                                                           &iterations, start, time_limit_us, &now)) {
             activeExpireHashContext ctx;
             ctx.it = &it;
             ctx.now = now / 1000; // convert to ms
