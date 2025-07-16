@@ -3325,7 +3325,7 @@ start_server {tags {"hashexpire external:skip"}} {
 }
 
 ##### Active expiry test slot migration #####
-start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}} {
+start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node-timeout 1000}} {
     # Flush all data on all cluster nodes before starting
     for {set i 0} {$i < 3} {incr i} {
         R $i FLUSHALL
@@ -3394,7 +3394,7 @@ start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}
 }
 
 ##### Active expiry test slot migration with multiple fields #####
-start_cluster 3 0 {tags {"cluster mytest"} overrides {cluster-node-timeout 1000}} {
+start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node-timeout 1000}} {
     # Flush all data on all cluster nodes before starting
     for {set i 0} {$i < 3} {incr i} {
         R $i FLUSHALL
