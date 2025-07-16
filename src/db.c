@@ -695,6 +695,7 @@ void discardTempDb(serverDb **tempDb) {
         if (tempDb[i]) {
             kvstoreRelease(tempDb[i]->keys);
             kvstoreRelease(tempDb[i]->expires);
+            kvstoreRelease(tempDb[i]->keys_with_volatile_items);
 
             /* These are expected to be empty on temporary databases */
             serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
