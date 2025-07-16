@@ -3347,7 +3347,7 @@ void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 vset *hashTypeGetVolatileSet(robj *o);
-size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
+size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);

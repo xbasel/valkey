@@ -493,6 +493,7 @@ static inline void *vsetBucketSingle(vsetBucket *b) {
 
 // Setters
 static inline vsetBucket *vsetBucketFromRawPtr(void *ptr, int type) {
+    assert(ptr != NULL);
     uintptr_t p = (uintptr_t)ptr;
     return (vsetBucket *)(p | (type & VSET_TAG_MASK));
 }
@@ -502,7 +503,6 @@ static inline vsetBucket *vsetBucketFromVector(pVector *vec) {
 }
 
 static inline vsetBucket *vsetBucketFromHashtable(hashtable *ht) {
-    assert(ht != NULL);
     return vsetBucketFromRawPtr(ht, VSET_BUCKET_HT);
 }
 
@@ -1602,7 +1602,6 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
         assert(hashtableAdd(ht, new_entry));
         hashtableTwoPhasePopDelete(ht, &pos);
     }
-
     return bucket;
 }
 
@@ -2096,8 +2095,4 @@ size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (
         panic("Unknown vset node type to defrag");
     }
     return 0;
-}
-
-bool vsetHasRax(vset *set) {
-    return vsetBucketType(*set) == VSET_BUCKET_RAX;
 }

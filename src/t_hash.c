@@ -138,7 +138,6 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
         // o had no vola items and we should track now.
         if (db && !has_vola) dbTrackKeyWithVolaItems(db, o);
     }
-    hashTypeIgnoreTTL(o, 0);
 }
 
 static inline void debugLogField(robj *key, void *entry) {
@@ -415,8 +414,9 @@ int hashTypeSet(serverDb *db, robj *o, sds field, sds value, long long expiry, i
                 serverAssert(replaced);
             }
 
-            /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             hashTypeTrackUpdateEntry(db, o, existing, new_entry, entry_expiry, expiry);
+
+            /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             update = is_expired ? 0 : 1;
         }
         hashTypeIgnoreTTL(o, false);
@@ -1736,9 +1736,6 @@ void hpersistCommand(client *c) {
     if (checkType(c, hash, OBJ_HASH))
         return;
 
-    /* Remember current volatile state to detect changes after modification. */
-    bool has_vola = hash && hashTypeHasVolatileElements(hash);
-
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(c->db, hash, c->argv[fields_index]->ptr);
         if (result > 0) {
@@ -1748,7 +1745,6 @@ void hpersistCommand(client *c) {
         addReplyLongLong(c, result);
     }
     if (changes) {
-        updateVolatileTrackingIfNeeded(c->db, hash, has_vola);
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
@@ -2123,14 +2119,14 @@ static int expireEntry(void *entry, void *c) {
 }
 
 /* Free all entry memory for a given list of expired entries. */
-void freeEntries(void **entries, int n) {
+static inline void freeEntries(void **entries, int n) {
     for (int i = 0; i < n; i++) {
         entryFree(entries[i]);
     }
 }
 
 /* Free all robj references created in an argv list, except the shared command in slot 0. */
-void freeArgvObjects(robj **argv, int argc) {
+static inline void freeArgvObjects(robj **argv, int argc) {
     for (int i = 1; i < argc; i++) {
         // skip 1, the shared command
         decrRefCount(argv[i]);
@@ -2167,7 +2163,7 @@ static int buildExpireFieldsArgv(void **entries, int n_entries, robj *o, robj *a
  *
  * Returns the number of expired fields removed.
  */
-size_t activeExpireFieldProcessKey(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
+size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
     serverAssert(max_entries > 0 && max_entries <= 1024);

@@ -173,7 +173,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     serverAssert(hashTypeHasVolatileElements(volaKey));
 
     serverDb *db = server.db[ctx->it->current_db];
-    ctx->entries_processed += activeExpireFieldProcessKey(volaKey, db, ctx->now, ctx->batch_Size);
+    ctx->entries_processed += hashTypeReclaimExpiredFields(volaKey, db, ctx->now, ctx->batch_Size);
 }
 
 static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
