@@ -2180,7 +2180,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
 
     expiryContext ctx = {.db = db, .key = o, .entries = entries, .n_entries = 0};
 
-    // TODO optmize with vsetEstimatedEarliestExpiry
+    // TODO optimize with vsetEstimatedEarliestExpiry
     /* Pop expired fields from the volatile set. */
     size_t expired = vsetPopExpired(vset, entryGetExpiry, expireEntry, now, max_entries, &ctx);
 
