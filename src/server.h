@@ -3552,7 +3552,6 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
 int dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
 int dbTrackKeyWithVolaItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o);
-void dbUnTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

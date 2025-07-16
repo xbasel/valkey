@@ -238,12 +238,11 @@ static inline int activeExpireEffort(void) {
  * memory for logically expired elements that were not accessed by clients.
  *
  * Field expiry is performed within a strict time budget and an entries-per-loop
- * limit to protect latency and CPU usage. An activeExpireFieldIterator tracks
- * which key and volatile set are currently being processed. Expired fields are
- * removed, and if the hash becomes empty, the parent key is deleted as well.
- *
+ * limit to protect latency and CPU usage. Expired fields are removed, and if the
+ * hash becomes empty, the parent key is deleted as well.
  */
 void activeExpireCycleFields(int type, unsigned long entries_per_call, long long time_limit_us) {
+    // Run only during slow cycle, on primary, and if active expiry is enabled
     if (type != ACTIVE_EXPIRE_CYCLE_SLOW) return;
     if (!server.active_expire_enabled || !iAmPrimary() || server.dbnum == 0) return;
 
@@ -253,9 +252,11 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
     static activeExpireFieldIterator it = {.current_db = 0};
     int dbs_performed = 0;
 
+    // Loop through a subset of DBs within time and iteration budget
     while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
                                                     &iterations, start, time_limit_us, &now)) {
         serverDb *db = server.db[it.current_db];
+        // Skip DBs with no tracked keys with volatile items
         if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
             advanceDb(&it);
             dbs_performed++;
@@ -263,6 +264,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         }
 
         size_t entries_processed = 0;
+        // Process up to entries_per_call entries
         while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
                                                            &iterations, start, time_limit_us, &now)) {
             activeExpireHashContext ctx;
@@ -271,6 +273,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             ctx.entries_processed = 0;
             ctx.batch_Size = entries_per_call;
 
+            // Scan hash keys with volatile fields, invoking expiry logic
             db->keys_with_volatile_items_cursor = kvstoreScan(db->keys_with_volatile_items,
                                                               db->keys_with_volatile_items_cursor, -1,
                                                               fieldExpireScanCallback,
@@ -278,6 +281,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 
             entries_processed += ctx.entries_processed;
 
+            // If scan is done and no more volatile keys, move to next DB
             if (db->keys_with_volatile_items_cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
                 advanceDb(&it);
                 dbs_performed++;
@@ -286,6 +290,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         }
     }
 
+    // Track how often the expiration loop hits time limits
     if (activeExpireFieldsCheckTimeLimitReached(&iterations, start, time_limit_us, &now)) {
         server.stat_expired_time_cap_reached_count++;
     }

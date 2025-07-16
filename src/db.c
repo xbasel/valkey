@@ -509,22 +509,10 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
-/**
- * Checks if the object is a hash object with volatile items and adds it to the hash field expiry kvstore
- */
+/* Checks if the object is a hash object with volatile items and adds it to the hash field expiry kvstore */
 void dbTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(o)) {
         dbTrackKeyWithVolaItems(db, o);
-    }
-}
-
-/**
- * Checks if the object is a hash object without volatile items and removes it from the hash field expiry kvstore
- * @Deprecated (remove this function after making sure its safe to)
- */
-void dbUnTrackKeyWithVolaItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && !hashTypeHasVolatileElements(o)) {
-        dbUntrackKeyWithVolaItems(db, o);
     }
 }
 
