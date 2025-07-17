@@ -2087,9 +2087,6 @@ static void propagateFieldsDeletion(serverDb *db, robj **argv, int argc) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
-    robj *keyobj = argv[1];
-    notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-
     server.replication_allowed = prev_replication_allowed;
 }
 
@@ -2212,6 +2209,8 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
         signalModifiedKey(NULL, db, keyobj);
     } else {
         propagateFieldsDeletion(ctx.db, argv, argc);
+        robj *keyobj = argv[1];
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
         if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
     }
     exitExecutionUnit();
