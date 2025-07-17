@@ -39,7 +39,7 @@
  */
 
 #include "server.h"
-#include "entry.h"
+#include "entry.h" // TODO do we need this?
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"
@@ -145,12 +145,6 @@ typedef struct {
     getClientChannelsFn getPubSubChannels;
 } defragPubSubCtx;
 static_assert(offsetof(defragPubSubCtx, kvstate) == 0, "defragStageKvstoreHelper requires this");
-
-/* Context for defragmenting hash objects: holds the DB and the hash key object. */
-typedef struct {
-    serverDb *db;
-    robj *o;
-} defragObjectCtx;
 
 /* When scanning a main kvstore, large elements are queued for later handling rather than
  * causing a large latency spike while processing a hash table bucket.  This list is only used
@@ -448,7 +442,7 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
 }
 
 /* Hashtable scan callback for hash datatype */
-static void activeDefragEntry(void *privdata, void *element_ref) {
+static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     entry **entry_ref = (entry **)element_ref;
     entry *old_entry = *entry_ref, *new_entry = NULL;
     long long old_expiry = entryGetExpiry(old_entry);
@@ -457,9 +451,8 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
     if (new_entry) {
         /* In case the entry is tracked we need to update it in the volatile set */
         if (entryHasExpiry(new_entry)) {
-            defragObjectCtx *ctx = privdata;
-            serverAssert(ctx && ctx->db && ctx->o);
-            hashTypeTrackUpdateEntry(ctx->db, ctx->o, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            // We don't need to pass the db because db-level tracking isn't going to change for this update.
+            hashTypeTrackUpdateEntry(NULL, privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;
     }
@@ -499,7 +492,7 @@ static void defragZsetSkiplist(robj *ob) {
     }
 }
 
-static void defragHash(serverDb *db, robj *ob) {
+static void defragHash(robj *ob) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
@@ -507,8 +500,7 @@ static void defragHash(serverDb *db, robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            defragObjectCtx ctx = {db, ob};
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
         } while (cursor != 0);
     }
     /* defrag the hashtable struct and tables */
@@ -543,16 +535,16 @@ static int defragRaxNode(raxNode **noderef) {
     return 0;
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore *kvsore) {
+static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore *kvsore) { // TODO xbasel correct kvsore
     serverDb *db = server.db[dbid];
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    defragObjectCtx ctx = {db, ob};
+    // TODO xbasel, compare kvstore type (dtype) to detect  keys_with_volatile_items
     if (kvsore == db->keys_with_volatile_items) {
         vset *vset = hashTypeGetVolatileSet(ob);
         *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
     } else {
-        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, &ctx, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
     }
 }
 
@@ -704,15 +696,6 @@ static void defragModule(serverDb *db, robj *obj) {
     if (!moduleDefragValue(sds_key_passed_as_robj, obj, db->id)) defragLater(obj);
 }
 
-/* Replace oldptr with newptr in a kvstore slot,
- * typically after reallocation. */
-static inline void replaceReallocatedKvstoreEntry(kvstore *kvs, int slot, robj *oldptr, robj *newptr) {
-    if (oldptr == newptr) return;
-    hashtable *ht = kvstoreGetHashtable(kvs, slot);
-    int replaced = hashtableReplaceReallocatedEntry(ht, oldptr, newptr);
-    serverAssert(replaced);
-}
-
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 static void defragKey(defragKeysCtx *ctx, robj **elemref) {
@@ -774,7 +757,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
             if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            defragHash(db, ob);
+            defragHash(ob);
         } else {
             serverPanic("Unknown hash encoding");
         }

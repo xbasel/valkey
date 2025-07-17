@@ -2187,7 +2187,6 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
     serverAssert(ctx.n_entries <= max_entries);
 
     if (expired == 0) {
-        hashTypeIgnoreTTL(o, 0);
         goto cleanup;
     }
 
@@ -2213,13 +2212,13 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
         signalModifiedKey(NULL, db, keyobj);
     } else {
         propagateFieldsDeletion(ctx.db, argv, argc);
-        hashTypeIgnoreTTL(o, 0);
         if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
     }
     exitExecutionUnit();
     postExecutionUnitOperations();
 
 cleanup:
+    if (!deleteKey) hashTypeIgnoreTTL(o, 0);
     /* Cleanup argv objects and freed entries. */
     freeArgvObjects(argv, argc);
     freeEntries(ctx.entries, ctx.n_entries);
