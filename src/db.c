@@ -1842,11 +1842,11 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && hashTypeHasVolatileElements(val);
     robj *newval = objectSetExpire(val, when);
     if (updateHashExpiryKvsgtore && newval != val) {
-            // Replace the pointer in the expire table without accessing the old pointer
-            int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
-            hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
-            int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
-            serverAssert(replaced);
+        // Replace the pointer in the expire table without accessing the old pointer
+        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
+        int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
+        serverAssert(replaced);
     }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
