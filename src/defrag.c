@@ -535,17 +535,10 @@ static int defragRaxNode(raxNode **noderef) {
     return 0;
 }
 
-static void scanLaterHash(robj *ob, unsigned long *cursor, int dbid, kvstore *kvsore) { // TODO xbasel correct kvsore
-    serverDb *db = server.db[dbid];
+static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    // TODO xbasel, compare kvstore type (dtype) to detect  keys_with_volatile_items
-    if (kvsore == db->keys_with_volatile_items) {
-        vset *vset = hashTypeGetVolatileSet(ob);
-        *cursor = vsetScanDefrag(vset, *cursor, activeDefragAlloc, defragRaxNode);
-    } else {
-        *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    }
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -836,7 +829,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
 
 /* returns 0 more work may or may not be needed (see non-zero cursor),
  * and 1 if time is up and more work is needed. */
-static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore *kvstore) {
+static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore *kvs) {
     if (ob) {
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
@@ -845,7 +838,12 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
         } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            scanLaterHash(ob, cursor, dbid, kvstore);
+            serverDb *db = server.db[dbid];
+            if (kvs == db->keys_with_volatile_items) {
+                *cursor = scanLaterHashVset(ob, *cursor, activeDefragAlloc, defragRaxNode);
+            } else {
+                scanLaterHash(ob, cursor);
+            }
         } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
