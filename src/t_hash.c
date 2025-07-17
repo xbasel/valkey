@@ -2230,9 +2230,8 @@ int dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o) {
     return hashTypeHasVolatileElements(o) ? dbTrackKeyWithVolaItems(db, o) : dbUntrackKeyWithVolaItems(db, o);
 }
 
-unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, hashtableScanFunction fn, int (*defragRaxNode)(raxNode **)) {
+unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **)) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
     if (!hashTypeHasVolatileElements(ob)) return 0;
     vset *vset = hashTypeGetVolatileSet(ob);
     return vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);

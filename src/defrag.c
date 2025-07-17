@@ -39,7 +39,6 @@
  */
 
 #include "server.h"
-#include "entry.h" // TODO do we need this?
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"
@@ -145,6 +144,7 @@ typedef struct {
     getClientChannelsFn getPubSubChannels;
 } defragPubSubCtx;
 static_assert(offsetof(defragPubSubCtx, kvstate) == 0, "defragStageKvstoreHelper requires this");
+
 
 /* When scanning a main kvstore, large elements are queued for later handling rather than
  * causing a large latency spike while processing a hash table bucket.  This list is only used
@@ -840,7 +840,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             serverDb *db = server.db[dbid];
             if (kvs == db->keys_with_volatile_items) {
-                *cursor = scanLaterHashVset(ob, *cursor, activeDefragAlloc, defragRaxNode);
+                *cursor = scanLaterHashVset(ob, *cursor, defragRaxNode);
             } else {
                 scanLaterHash(ob, cursor);
             }
@@ -1015,7 +1015,7 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
     static defragKeysCtx ctx; // STATIC - this persists
-    ctx.dbid = dbid;          // TODO xbasel is this even needed?
+    ctx.dbid = dbid;
     return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
                                     dbKeysWithVolatileItemsScanCallback, defragLaterStep, &ctx);
 }
