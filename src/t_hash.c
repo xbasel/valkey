@@ -1033,12 +1033,9 @@ void hdelCommand(client *c) {
         if (hashTypeDelete(c->db, o, c->argv[j]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
-                updateVolatileTrackingIfNeeded(c->db, o, has_vola);
                 dbDelete(c->db, c->argv[1]); /* Please note that this will also remove the tracking from the kvstore */
                 keyremoved = 1;
                 break;
-            } else if (!hashTypeHasVolatileElements(o)) {
-                updateVolatileTrackingIfNeeded(c->db, o, has_vola);
             }
         }
     }
