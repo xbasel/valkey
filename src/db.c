@@ -461,14 +461,14 @@ robj *dbRandomKey(serverDb *db) {
 
 /* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
 void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(o)) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
         dbTrackKeyWithVolaItems(db, o);
     }
 }
 
 /* Untracks the key if it’s a hash with volatile fields, for field-level expiry. */
 void dbUntrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(o)) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
         dbUntrackKeyWithVolaItems(db, o);
     }
 }
@@ -522,17 +522,17 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 }
 
 /* Add a key with volatile items to the tracking kvstore.  */
-int dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
+void dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
     serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
-    return kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
-int dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
+void dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
     serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
-    return kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
+    kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */

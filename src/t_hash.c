@@ -2196,7 +2196,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
 
     if (!hashTypeHasVolatileElements(o)) {
         hashTypeFreeVolatileSet(o);
-        serverAssert(dbUntrackKeyWithVolaItems(db, o));
+        dbUntrackKeyWithVolaItems(db, o);
     }
 
     /* Check if the entire key should be deleted. */
@@ -2225,9 +2225,13 @@ cleanup:
     return expired;
 }
 
-int dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o) {
+void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o) {
     serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
-    return hashTypeHasVolatileElements(o) ? dbTrackKeyWithVolaItems(db, o) : dbUntrackKeyWithVolaItems(db, o);
+    if (hashTypeHasVolatileElements(o)) {
+        dbTrackKeyWithVolaItems(db, o);
+    } else {
+        dbUntrackKeyWithVolaItems(db, o);
+    }
 }
 
 unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **)) {

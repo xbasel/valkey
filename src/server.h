@@ -3341,7 +3341,7 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-int dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
+void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 void hashTypeFreeVolatileSet(robj *o);
 void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
 void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
@@ -3545,8 +3545,8 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
-int dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
-int dbTrackKeyWithVolaItems(serverDb *db, robj *o);
+void dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
+void dbTrackKeyWithVolaItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
