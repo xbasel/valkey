@@ -1585,18 +1585,10 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
     if (old_entry == new_entry)
         return bucket;
 
-    hashtablePosition pos;
     hashtable *ht = vsetBucketHashtable(bucket);
     /* We do a two stage pop in order to avoid rehashing. */
-    void **ref = hashtableTwoPhasePopFindRef(ht, old_entry, &pos);
-    if (!ref) {
-        /* In case no entry found, the rehashing did not pause, so it is safe to return. */
+    if (!hashtableReplaceReallocatedEntry(ht, old_entry, new_entry))
         return vsetBucketFromNone();
-    } else {
-        /* We know for sure the two entries are not the same, so it is safe to add the new and remove the old */
-        assert(hashtableAdd(ht, new_entry));
-        hashtableTwoPhasePopDelete(ht, &pos);
-    }
     return bucket;
 }
 
