@@ -596,7 +596,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * expiry of both key-level and field-level TTLs.
  * Should be called when the database is fully cleared (e.g. FLUSHDB).
  */
-void resetExpiryCycle(serverDb *db) {
+static inline void resetExpiryCycle(serverDb *db) {
     /* All keys removed: reset TTL stats and active expiry cursors */
     db->avg_ttl = 0;
     db->expires_cursor = 0;
@@ -1839,7 +1839,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
 
     /* If this is a hash with volatile fields, untrack it before setting the expire,
      * since objectSetExpire may reallocate it. We'll re-track the new object after. */
-    bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
+    bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && hashTypeHasVolatileElements(val);
     robj *newval = objectSetExpire(val, when);
     if (updateHashExpiryKvsgtore && newval != val) {
             // Replace the pointer in the expire table without accessing the old pointer
