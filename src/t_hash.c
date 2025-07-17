@@ -2173,6 +2173,9 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
     vset *vset = hashTypeGetVolatileSet(o);
     serverAssert(!vsetIsEmpty(vset));
 
+    /* set to true if the key gets deleted. */
+    bool deleteKey = false;
+
     /* Temporary storage on stack for the entries and argv. */
     void *entries[max_entries];
     robj *argv[max_entries + 2]; // 2 extra slots for HDEL and key
@@ -2200,7 +2203,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
     }
 
     /* Check if the entire key should be deleted. */
-    bool deleteKey = hashTypeLength(o) == 0;
+    deleteKey = hashTypeLength(o) == 0;
 
     enterExecutionUnit(1, 0);
     if (deleteKey) {
