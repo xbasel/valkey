@@ -705,12 +705,11 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     unsigned char *newzl;
     ob = *elemref;
 
+    /* Check if this is a hash object containing volatile fields.
+     * Needed to update keys_with_volatile_items after defrag. */
+    int is_hash_with_volatile_fields = ob->type == OBJ_HASH && hashTypeHasVolatileElements(ob);
+
     /* Try to defrag robj and/or string value. */
-    /* Also untrack hash, and track it again with the new reference */
-    bool key_with_volatile_items = ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(ob);
-    if (key_with_volatile_items) {
-        dbUntrackKeyWithVolaItems(db, ob);
-    }
     if ((newob = activeDefragStringOb(ob))) {
         *elemref = newob;
         if (objectGetExpire(newob) >= 0) {
@@ -720,10 +719,12 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
             serverAssert(replaced);
         }
+        if (is_hash_with_volatile_fields) {
+            hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);
+            int replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
+            serverAssert(replaced);
+        }
         ob = newob;
-    }
-    if (key_with_volatile_items) {
-        dbTrackKeyWithVolaItems(db, ob);
     }
 
     if (ob->type == OBJ_STRING) {
