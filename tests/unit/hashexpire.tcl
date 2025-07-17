@@ -3717,36 +3717,42 @@ start_server {tags {"hashexpire external:skip"}} {
         
         proc read_monitor_output {rd_replica read_amount} {
             set res {}
-            for {set i 0} {$i <= $read_amount} {incr i} {
+            set i 0
+            while {$i < $read_amount} {
                 set curr_read [$rd_replica read]
+                
+                # Skip lines with INFO commands
+                if {[regexp {\"info\"} $curr_read] || [regexp {\"SELECT\"} $curr_read]} {
+                    continue
+                }
                 lappend res $curr_read
-                # lappend res [$rd_replica read]
+                incr i
             }
             $rd_replica close
             return [join $res " "]
         }
 
         # These tests are flaky, probably monitor output should be filtered 
-        # test {Multiple expired hash fields are replicated as single HDEL command to replica} {
-        #     lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
-        #     $primary HSET myhash f1 v1 f2 v2 f3 v3
-        #     wait_for_ofs_sync $primary $replica
-        #     $primary HPEXPIRE myhash 50 FIELDS 1 f2
-        #     wait_for_ofs_sync $primary $replica
-        #     wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
-        #     set _ [read_monitor_output $rd_replica 5]
-        # } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f2*}
+        test {Multiple expired hash fields are replicated as single HDEL command to replica} {
+            lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            wait_for_ofs_sync $primary $replica
+            $primary HPEXPIRE myhash 50 FIELDS 1 f2
+            wait_for_ofs_sync $primary $replica
+            wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
+            set _ [read_monitor_output $rd_replica 3]
+        } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f2*}
 
-        # test {HDEL replication includes only actually expired fields not non-existent ones} {
-        #     lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
+        test {HDEL replication includes only actually expired fields not non-existent ones} {
+            lassign [setup_replica_monitor_test $primary $replica $primary_host $primary_port $replica_host $replica_port] primary_initial_expired rd_replica
             
-        #     $primary HSET myhash f1 v1 f2 v2 f3 v3
-        #     wait_for_ofs_sync $primary $replica
-        #     $primary HPEXPIRE myhash 50 FIELDS 2 f1 f5
-        #     wait_for_ofs_sync $primary $replica
-        #     wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
-        #     set _ [read_monitor_output $rd_replica 4]
-        # } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f1*}
+            $primary HSET myhash f1 v1 f2 v2 f3 v3
+            wait_for_ofs_sync $primary $replica
+            $primary HPEXPIRE myhash 50 FIELDS 2 f1 f5
+            wait_for_ofs_sync $primary $replica
+            wait_for_active_expiry $primary myhash 2 $primary_initial_expired 1
+            set _ [read_monitor_output $rd_replica 3]
+        } {*HSET*myhash*f1*f2*f3*HDEL*myhash*f1*}
     }
 }
 
