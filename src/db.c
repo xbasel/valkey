@@ -1840,12 +1840,13 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* If this is a hash with volatile fields, untrack it before setting the expire,
      * since objectSetExpire may reallocate it. We'll re-track the new object after. */
     bool updateHashExpiryKvsgtore = val->type == OBJ_HASH && val->encoding == OBJ_ENCODING_HASHTABLE && hashTypeHasVolatileElements(val);
-    if (updateHashExpiryKvsgtore) {
-        dbUntrackKeyWithVolaItems(db, val);
-    }
     robj *newval = objectSetExpire(val, when);
-    if (updateHashExpiryKvsgtore) {
-        dbTrackKeyWithVolaItems(db, newval);
+    if (updateHashExpiryKvsgtore && newval != val) {
+            // Replace the pointer in the expire table without accessing the old pointer
+            int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+            hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
+            int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
+            serverAssert(replaced);
     }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
