@@ -810,7 +810,7 @@ static bool splitBucketIfPossible(vsetBucket *parent, vsetGetExpiryFunc getExpir
     /* first lets sort the vector. we cannot take a decision without it.
      * We set the global expiry getter so we can sort according to the provided getExpiry function.
      * TODO: After some thought I think it might be better to avoid sorting and attempt a quickselect. just allocate a new vector with the same size.
-     * Than scan once and choose a pivot which is the median or avarage bucket_ts. Then move all entries smaller to the new vector. then shrink both vectors as needed. */
+     * Than scan once and choose a pivot which is the median or average bucket_ts. Then move all entries smaller to the new vector. then shrink both vectors as needed. */
     vsetSetExpiryGetter(getExpiry);
     pvSort(pv, vsetCompareEntries);
     vsetUnsetExpiryGetter();
