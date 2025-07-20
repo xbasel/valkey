@@ -176,7 +176,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     ctx->entries_processed += hashTypeReclaimExpiredFields(volaKey, db, ctx->now, ctx->batch_Size);
 }
 
-static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
+static int isExpiryTableValidForSamplingCb(hashtable *ht) {
     long long numkeys = hashtableSize(ht);
     unsigned long buckets = hashtableBuckets(ht);
     /* When there are less than 1% filled buckets, sampling the key
@@ -195,7 +195,7 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
  * every 16 iterations. Returns true if the elapsed time since `start_us`
  * exceeds `limit_us`.
  */
-static inline int activeExpireFieldsCheckTimeLimitReached(
+static int activeExpireFieldsCheckTimeLimitReached(
     unsigned int *iterations,
     uint64_t start_us,
     uint64_t limit_us,
@@ -211,7 +211,7 @@ static inline int activeExpireFieldsCheckTimeLimitReached(
  * If the last DB was reached, wrap around to DB 0.
  */
 
-static inline void advanceDb(activeExpireFieldIterator *it) {
+static void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
@@ -225,7 +225,7 @@ static inline void advanceDb(activeExpireFieldIterator *it) {
  * Internally we use a 0-based effort level (0–9), while the server config
  * exposes it as 1–10. This helper normalizes it for internal use.
  */
-static inline int activeExpireEffort(void) {
+static int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
 }
 
