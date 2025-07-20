@@ -867,7 +867,6 @@ typedef struct serverDb {
     int id;                                        /* Database ID */
     long long avg_ttl;                             /* Average TTL, just for stats */
     unsigned long expires_cursor;                  /* Cursor of the keys active expire cycle. */
-    unsigned long keys_with_volatile_items_cursor; /* Cursor for keys with volatile items (field-level TTL) */
 } serverDb;
 
 /* forward declaration for functions ctx */

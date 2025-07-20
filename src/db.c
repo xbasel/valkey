@@ -588,19 +588,6 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     return o;
 }
 
-/*
- * Reset active expiry state for a database.
- * This includes the average TTL and the cursors used for incremental
- * expiry of both key-level and field-level TTLs.
- * Should be called when the database is fully cleared (e.g. FLUSHDB).
- */
-static inline void resetExpiryCycle(serverDb *db) {
-    /* All keys removed: reset TTL stats and active expiry cursors */
-    db->avg_ttl = 0;
-    db->expires_cursor = 0;
-    db->keys_with_volatile_items_cursor = 0;
-}
-
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
@@ -631,7 +618,8 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         }
 
         /* Because all keys of database are removed, reset average ttl and cursors. */
-        resetExpiryCycle(dbarray[j]);
+        dbarray[j]->avg_ttl = 0;
+        dbarray[j]->expires_cursor = 0;
     }
 
     return removed;
@@ -1700,14 +1688,12 @@ int dbSwapDatabases(int id1, int id2) {
     db1->keys_with_volatile_items = db2->keys_with_volatile_items;
     db1->avg_ttl = db2->avg_ttl;
     db1->expires_cursor = db2->expires_cursor;
-    db1->keys_with_volatile_items_cursor = db2->keys_with_volatile_items_cursor;
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     db2->avg_ttl = aux.avg_ttl;
     db2->expires_cursor = aux.expires_cursor;
-    db2->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1749,14 +1735,12 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         activedb->keys_with_volatile_items = newdb->keys_with_volatile_items;
         activedb->avg_ttl = newdb->avg_ttl;
         activedb->expires_cursor = newdb->expires_cursor;
-        activedb->keys_with_volatile_items_cursor = newdb->keys_with_volatile_items_cursor;
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
         newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
         newdb->avg_ttl = aux.avg_ttl;
         newdb->expires_cursor = aux.expires_cursor;
-        newdb->keys_with_volatile_items_cursor = aux.keys_with_volatile_items_cursor;
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list

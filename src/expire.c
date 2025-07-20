@@ -136,6 +136,7 @@ typedef struct {
 
 typedef struct activeExpireFieldIterator {
     int current_db;
+    unsigned long cursor; /* Cursor for keys with volatile items (field-level TTL) */
 } activeExpireFieldIterator;
 
 typedef struct activeExpireHashContext {
@@ -216,7 +217,7 @@ static void advanceDb(activeExpireFieldIterator *it) {
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
         serverDb *db = server.db[it->current_db];
-        if (db != NULL) db->keys_with_volatile_items_cursor = 0;
+        it->cursor = 0;
     }
 }
 
@@ -244,7 +245,7 @@ static int activeExpireEffort(void) {
 void activeExpireCycleFields(int type, unsigned long entries_per_call, long long time_limit_us) {
     // Run only during slow cycle, on primary, and if active expiry is enabled
     if (type != ACTIVE_EXPIRE_CYCLE_SLOW) return;
-    if (!server.active_expire_enabled || !iAmPrimary() || server.dbnum == 0) return;
+    if (!server.active_expire_enabled || !iAmPrimary()) return;
 
     unsigned int iterations = 0;
     uint64_t start = ustime();
@@ -274,15 +275,15 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
             ctx.batch_Size = entries_per_call;
 
             // Scan hash keys with volatile fields, invoking expiry logic
-            db->keys_with_volatile_items_cursor = kvstoreScan(db->keys_with_volatile_items,
-                                                              db->keys_with_volatile_items_cursor, -1,
+            it.cursor = kvstoreScan(db->keys_with_volatile_items,
+                                                              it.cursor, -1,
                                                               fieldExpireScanCallback,
                                                               isExpiryTableValidForSamplingCb, &ctx);
 
             entries_processed += ctx.entries_processed;
 
             // If scan is done and no more volatile keys, move to next DB
-            if (db->keys_with_volatile_items_cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
+            if (it.cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
                 advanceDb(&it);
                 dbs_performed++;
                 break;
