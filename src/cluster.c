@@ -296,8 +296,9 @@ void restoreCommand(client *c) {
         }
     }
 
+    // TODO remove xbaselm no t needed seTExpire does it.
     /* Track the hash object if it contains fields with expiration to be considered during active expiry */
-    dbTrackKeyWithVolatileItemsIfNeeded(c->db, obj);
+    // dbTrackKeyWithVolatileItemsIfNeeded(c->db, obj);
 
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
     signalModifiedKey(c, c->db, key);

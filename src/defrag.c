@@ -925,12 +925,6 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
     if (kvs != state.kvs) {
         // There has been a change of the kvs (flushdb, swapdb, etc.).  Just complete the stage.
-        if (defrag_later) {
-            // The kvstore was replaced, defrag_later are no longer relevant.
-            listRelease(defrag_later);
-            defrag_later = NULL;
-            defrag_later_cursor = 0;
-        }
         return DEFRAG_DONE;
     }
 

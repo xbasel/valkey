@@ -545,7 +545,7 @@ void activeExpireCycle(int type) {
     unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
 
 
-    static int expireCycleStartWithFields = 0;
+    static bool expireCycleStartWithFields = 0;
 
     /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
      * time per iteration. Since this function gets called with a frequency of
@@ -561,7 +561,7 @@ void activeExpireCycle(int type) {
     serverAssert(server.also_propagate.numops == 0);
 
     if (expireCycleStartWithFields) {
-        first = activeExpireCycleFields;
+        first = activeExpireCycleFields; // TODO xbasel do ACTIVE_EXPIRE_CYCLE_FAST for fields
         second = activeExpireCycleKeys;
     } else {
         first = activeExpireCycleKeys;

@@ -219,7 +219,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     val = objectSetKeyAndExpire(val, key->ptr, -1);
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
-    dbTrackKeyWithVolatileItemsIfNeeded(db, val);
+    dbTrackKeyWithVolatileItemsIfNeeded(db, val); // TODO xbasel Did we untrack the object before rellaoctaion?
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -523,14 +523,12 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore.  */
 void dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
-    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
 void dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
-    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
