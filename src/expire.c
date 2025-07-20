@@ -140,9 +140,8 @@ typedef struct activeExpireFieldIterator {
 } activeExpireFieldIterator;
 
 typedef struct activeExpireHashContext {
-    activeExpireFieldIterator *it;
-    mstime_t now;
-    size_t batch_Size;
+    serverDb *db;
+    size_t max_entries;
     size_t entries_processed;
 } activeExpireHashContext;
 
@@ -173,8 +172,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     serverAssert(volaKey);
     serverAssert(hashTypeHasVolatileElements(volaKey));
 
-    serverDb *db = server.db[ctx->it->current_db];
-    ctx->entries_processed += hashTypeReclaimExpiredFields(volaKey, db, ctx->now, ctx->batch_Size);
+    ctx->entries_processed += hashTypeReclaimExpiredFields(volaKey, ctx->db, mstime(), ctx->max_entries);
 }
 
 static int isExpiryTableValidForSamplingCb(hashtable *ht) {
@@ -247,15 +245,18 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
     if (type != ACTIVE_EXPIRE_CYCLE_SLOW) return;
     if (!server.active_expire_enabled || !iAmPrimary()) return;
 
-    unsigned int iterations = 0;
-    uint64_t start = ustime();
-    uint64_t now = start;
+    uint64_t start = getMonotonicUs();
+
     static activeExpireFieldIterator it = {.current_db = 0};
     int dbs_performed = 0;
 
     // Loop through a subset of DBs within time and iteration budget
-    while (dbs_performed < CRON_DBS_PER_CALL && !activeExpireFieldsCheckTimeLimitReached(
-                                                    &iterations, start, time_limit_us, &now)) {
+    while (dbs_performed < CRON_DBS_PER_CALL) {
+        if (elapsedUs(start) >= time_limit_us) {
+            server.stat_expired_time_cap_reached_count++;
+            break;
+        }
+
         serverDb *db = server.db[it.current_db];
         // Skip DBs with no tracked keys with volatile items
         if (!db || kvstoreSize(db->keys_with_volatile_items) == 0) {
@@ -265,35 +266,20 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         }
 
         size_t entries_processed = 0;
-        // Process up to entries_per_call entries
-        while (entries_processed < entries_per_call && !activeExpireFieldsCheckTimeLimitReached(
-                                                           &iterations, start, time_limit_us, &now)) {
-            activeExpireHashContext ctx;
-            ctx.it = &it;
-            ctx.now = now / 1000; // convert to ms
-            ctx.entries_processed = 0;
-            ctx.batch_Size = entries_per_call;
+        
+        activeExpireHashContext ctx = {.db = db, .entries_processed = 0, .max_entries = entries_per_call};
 
-            // Scan hash keys with volatile fields, invoking expiry logic
-            it.cursor = kvstoreScan(db->keys_with_volatile_items,
-                                                              it.cursor, -1,
-                                                              fieldExpireScanCallback,
-                                                              isExpiryTableValidForSamplingCb, &ctx);
+        // Scan hash keys with volatile fields, invoking expiry logic
+        it.cursor = kvstoreScan(db->keys_with_volatile_items,
+                                it.cursor, -1,
+                                fieldExpireScanCallback,
+                                isExpiryTableValidForSamplingCb, &ctx);
 
-            entries_processed += ctx.entries_processed;
-
-            // If scan is done and no more volatile keys, move to next DB
-            if (it.cursor == 0 && !kvstoreSize(db->keys_with_volatile_items)) {
-                advanceDb(&it);
-                dbs_performed++;
-                break;
-            }
+        entries_processed += ctx.entries_processed;
+        if (it.cursor == 0) {
+            advanceDb(&it);
+            dbs_performed++;
         }
-    }
-
-    // Track how often the expiration loop hits time limits
-    if (activeExpireFieldsCheckTimeLimitReached(&iterations, start, time_limit_us, &now)) {
-        server.stat_expired_time_cap_reached_count++;
     }
 }
 
