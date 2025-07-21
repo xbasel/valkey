@@ -187,24 +187,6 @@ static int isExpiryTableValidForSamplingCb(hashtable *ht) {
     return C_OK;
 }
 
-/* Check if the active expire loop has reached its time limit.
- *
- * This is called repeatedly during field-level expiration. To reduce
- * the cost of frequent time sampling, we update `now_us` only once
- * every 16 iterations. Returns true if the elapsed time since `start_us`
- * exceeds `limit_us`.
- */
-static int activeExpireFieldsCheckTimeLimitReached(
-    unsigned int *iterations,
-    uint64_t start_us,
-    uint64_t limit_us,
-    uint64_t *now_us) {
-    if (((*iterations)++ & 0xf) == 0) {
-        *now_us = ustime();
-    }
-    return (*now_us - start_us >= limit_us);
-}
-
 /* Advance to the next DB in the active expire field iterator.
  *
  * If the last DB was reached, wrap around to DB 0.
