@@ -266,7 +266,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
         }
 
         size_t entries_processed = 0;
-        
+
         activeExpireHashContext ctx = {.db = db, .entries_processed = 0, .max_entries = entries_per_call};
 
         // Scan hash keys with volatile fields, invoking expiry logic
@@ -284,7 +284,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 }
 
 
-void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long long timelimit) {
+void activeExpireCycleKeys(int type, unsigned long keys_per_loop, long long timelimit_us) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
@@ -327,7 +327,7 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
 
     timelimit_exit = 0;
 
-    if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit = config_cycle_fast_duration; /* in microseconds. */
+    if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit_us = config_cycle_fast_duration; /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
      * about the number of keys that are already logically expired, but still
@@ -383,7 +383,7 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
             data.sampled = 0;
             data.expired = 0;
 
-            if (num > config_keys_per_loop) num = config_keys_per_loop;
+            if (num > keys_per_loop) num = keys_per_loop;
 
             /* Here we access the low level representation of the hash table
              * for speed concerns: this makes this code coupled with dict.c,
@@ -458,7 +458,7 @@ void activeExpireCycleKeys(int type, unsigned long config_keys_per_loop, long lo
                 }
                 if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
                     elapsed = ustime() - start;
-                    if (elapsed > timelimit) {
+                    if (elapsed > timelimit_us) {
                         timelimit_exit = 1;
                         server.stat_expired_time_cap_reached_count++;
                         break;
@@ -527,9 +527,9 @@ void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
-    unsigned long config_keys_per_loop =
+    int config_keys_per_loop =
         ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * activeExpireEffort();
-    unsigned long config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
+    int config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
 
 
     static bool expireCycleStartWithFields = 0;
