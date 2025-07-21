@@ -68,15 +68,6 @@ static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     }
 }
 
-/* Conditionally update the key's volatile tracking state.
- * Only triggers if the hash object's volatile state (presence of expiring fields)
- * changed from the previous state — either from no volatile fields to some,
- * or from some to none. */
-static inline void updateVolatileTrackingIfNeeded(serverDb *db, robj *o, int prev_has_vola) {
-    if (hashTypeHasVolatileElements(o) != prev_has_vola)
-        dbUpdateKeyWithVolaItemsTracking(db, o);
-}
-
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     vset *vset = hashtableMetadata(o->ptr);

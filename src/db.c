@@ -616,8 +616,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
             kvstoreEmpty(dbarray[j]->expires, callback);
             kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
-
-        /* Because all keys of database are removed, reset average ttl and cursors. */
+        /* Because all keys of database are removed, reset average ttl. */
         dbarray[j]->avg_ttl = 0;
         dbarray[j]->expires_cursor = 0;
     }

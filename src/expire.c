@@ -142,7 +142,7 @@ typedef struct activeExpireFieldIterator {
 typedef struct activeExpireHashContext {
     serverDb *db;
     size_t max_entries;
-    size_t entries_processed;
+    size_t entries_expired;
 } activeExpireHashContext;
 
 void expireScanCallback(void *privdata, void *entry) {
@@ -172,7 +172,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     serverAssert(volaKey);
     serverAssert(hashTypeHasVolatileElements(volaKey));
 
-    ctx->entries_processed += hashTypeReclaimExpiredFields(volaKey, ctx->db, mstime(), ctx->max_entries);
+    ctx->entries_expired += hashTypeReclaimExpiredFields(volaKey, ctx->db, mstime(), ctx->max_entries);
 }
 
 static int isExpiryTableValidForSamplingCb(hashtable *ht) {
@@ -248,7 +248,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, monotime 
 
         size_t entries_processed = 0;
 
-        activeExpireHashContext ctx = {.db = db, .entries_processed = 0, .max_entries = entries_per_call};
+        activeExpireHashContext ctx = {.db = db, .entries_expired = 0, .max_entries = entries_per_call};
 
         // Scan hash keys with volatile fields, invoking expiry logic
         it.cursor = kvstoreScan(db->keys_with_volatile_items,
@@ -256,8 +256,8 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, monotime 
                                 fieldExpireScanCallback,
                                 isExpiryTableValidForSamplingCb, &ctx);
 
-        entries_processed += ctx.entries_processed;
-        if (ctx.entries_processed < entries_per_call && it.cursor == 0) {
+        entries_processed += ctx.entries_expired;
+        if (ctx.entries_expired < entries_per_call && it.cursor == 0) {
             advanceDb(&it);
             dbs_performed++;
         }
