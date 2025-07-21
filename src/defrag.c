@@ -458,6 +458,17 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     }
 }
 
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+static int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
+}
+
 static void defragQuicklist(robj *ob) {
     quicklist *ql = ob->ptr, *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
@@ -506,6 +517,11 @@ static void defragHash(robj *ob) {
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
     if (new_hashtable) ob->ptr = new_hashtable;
+    if (hashTypeHasVolatileElements(ob)) {
+        vset *vset = hashTypeGetVolatileSet(ob);
+        size_t vset_cursor = 0;
+        while ((vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode)) != 0);
+    }
 }
 
 static void defragSet(robj *ob) {
@@ -524,21 +540,35 @@ static void defragSet(robj *ob) {
     if (new_hashtable) ob->ptr = new_hashtable;
 }
 
-/* Defrag callback for radix tree iterator, called for each node,
- * used in order to defrag the nodes allocations. */
-static int defragRaxNode(raxNode **noderef) {
-    raxNode *newnode = activeDefragAlloc(*noderef);
-    if (newnode) {
-        *noderef = newnode;
-        return 1;
-    }
-    return 0;
-}
-
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    static robj *vsetObj = NULL;
+    static size_t vset_cursor = 0;
+    if (vsetObj != ob) vset_cursor = 0;  // Prevent stale state
+
+    if (vsetObj == ob && vset_cursor != 0) {
+        // We're already defragging volatile set
+        vset *vset = hashTypeGetVolatileSet(ob);
+        vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode);
+        if (vset_cursor == 0) {
+            vsetObj = NULL;
+        }
+        *cursor = vset_cursor;
+    } else {
+        hashtable *ht = ob->ptr;
+        size_t new_cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc,
+                                                HASHTABLE_SCAN_EMIT_REF);
+        *cursor = new_cursor;
+        if (new_cursor == 0 && hashTypeHasVolatileElements(ob)) {
+            vsetObj = ob;
+            vset *vset = hashTypeGetVolatileSet(vsetObj);
+            vset_cursor = vsetScanDefrag(vset, 0, activeDefragAlloc, defragRaxNode);
+            if (vset_cursor == 0) {
+                vsetObj = NULL;
+            }
+            *cursor = vset_cursor;
+        }
+    }
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -775,24 +805,6 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
     server.stat_active_defrag_scanned++;
 }
 
-static void dbKeysWithVolatileItemsScanCallback(void *privdata, void *elemref) {
-    robj *o = *(robj **)elemref;
-    serverAssert(o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE);
-    serverAssert(hashTypeHasVolatileElements(o));
-    vset *vset = hashTypeGetVolatileSet(o);
-
-    UNUSED(privdata);
-
-    if (hashtableSize(o->ptr) > server.active_defrag_max_scan_fields) {
-        defragLater(o);
-    } else {
-        size_t cursor = 0;
-        do {
-            cursor = vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);
-        } while (cursor != 0);
-    }
-}
-
 /* Defrag scan callback for a pubsub channels hashtable. */
 static void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragPubSubCtx *ctx = privdata;
@@ -838,12 +850,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
         } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            serverDb *db = server.db[dbid];
-            if (kvs == db->keys_with_volatile_items) {
-                *cursor = scanLaterHashVset(ob, *cursor, defragRaxNode);
-            } else {
-                scanLaterHash(ob, cursor);
-            }
+            scanLaterHash(ob, cursor);
         } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
@@ -1008,10 +1015,8 @@ static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *ta
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
-    static defragKeysCtx ctx; // STATIC - this persists
-    ctx.dbid = dbid;
     return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
-                                    dbKeysWithVolatileItemsScanCallback, defragLaterStep, &ctx);
+                                    scanHashtableCallbackCountScanned, NULL, NULL);
 }
 
 
