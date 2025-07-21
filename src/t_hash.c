@@ -141,9 +141,9 @@ void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_
 }
 
 static inline void debugLogField(robj *key, void *entry) {
-    if (server.verbosity <= LL_VERBOSE) {
+    if (1 <= LL_VERBOSE) {
         sds key2 = objectGetKey(key);
-        serverLog(LL_VERBOSE, "key %s field %s value %s expired",
+        serverLog(LL_WARNING, "key %s field %s value %s expired",
                   key2, entryGetField(entry), entryGetValue(entry));
     }
 }

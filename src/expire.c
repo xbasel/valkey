@@ -276,7 +276,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
                                 isExpiryTableValidForSamplingCb, &ctx);
 
         entries_processed += ctx.entries_processed;
-        if (it.cursor == 0) {
+        if (ctx.entries_processed < entries_per_call && it.cursor == 0) {
             advanceDb(&it);
             dbs_performed++;
         }
