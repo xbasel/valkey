@@ -240,7 +240,7 @@ static int activeExpireEffort(void) {
  * limit to protect latency and CPU usage. Expired fields are removed, and if the
  * hash becomes empty, the parent key is deleted as well.
  */
-void activeExpireCycleFields(int type, unsigned long entries_per_call, long long time_limit_us) {
+void activeExpireCycleFields(int type, unsigned long entries_per_call, monotime endtime_us) {
     // Run only during slow cycle, on primary, and if active expiry is enabled
     if (type != ACTIVE_EXPIRE_CYCLE_SLOW) return;
     if (!server.active_expire_enabled || !iAmPrimary()) return;
@@ -252,7 +252,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 
     // Loop through a subset of DBs within time and iteration budget
     while (dbs_performed < CRON_DBS_PER_CALL) {
-        if (elapsedUs(start) >= time_limit_us) {
+        if (elapsedUs(start) >= endtime_us) {
             server.stat_expired_time_cap_reached_count++;
             break;
         }
@@ -284,7 +284,7 @@ void activeExpireCycleFields(int type, unsigned long entries_per_call, long long
 }
 
 
-void activeExpireCycleKeys(int type, unsigned long keys_per_loop, long long timelimit_us) {
+void activeExpireCycleKeys(int type, unsigned long keys_per_loop, monotime endtime_us) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
@@ -327,7 +327,7 @@ void activeExpireCycleKeys(int type, unsigned long keys_per_loop, long long time
 
     timelimit_exit = 0;
 
-    if (type == ACTIVE_EXPIRE_CYCLE_FAST) timelimit_us = config_cycle_fast_duration; /* in microseconds. */
+    if (type == ACTIVE_EXPIRE_CYCLE_FAST) endtime_us = config_cycle_fast_duration; /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
      * about the number of keys that are already logically expired, but still
@@ -458,7 +458,7 @@ void activeExpireCycleKeys(int type, unsigned long keys_per_loop, long long time
                 }
                 if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
                     elapsed = ustime() - start;
-                    if (elapsed > timelimit_us) {
+                    if (elapsed > endtime_us) {
                         timelimit_exit = 1;
                         server.stat_expired_time_cap_reached_count++;
                         break;
@@ -482,10 +482,6 @@ void activeExpireCycleKeys(int type, unsigned long keys_per_loop, long long time
         current_perc = 0;
     server.stat_expired_stale_perc = (current_perc * 0.05) + (server.stat_expired_stale_perc * 0.95);
 }
-
-/* expiryDriver abstracts expiry routines with a unified signature,
- * allowing activeExpireCycle to alternate keys and fields cleanly. */
-typedef void expiryDriver(int type, unsigned long entries_per_loop, long long timelimit);
 
 /*
  * activeExpireCycle
@@ -538,29 +534,22 @@ void activeExpireCycle(int type) {
      * time per iteration. Since this function gets called with a frequency of
      * server.hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
-    long long timelimit = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+    long long timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
 
-    if (timelimit <= 0) timelimit = 1;
+    if (timelimit_us <= 0) timelimit_us = 1;
 
-    expiryDriver *first, *second;
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);
 
+    monotime endtime = getMonotonicUs() + timelimit_us;
+
     if (expireCycleStartWithFields) {
-        first = activeExpireCycleFields; // TODO xbasel do ACTIVE_EXPIRE_CYCLE_FAST for fields
-        second = activeExpireCycleKeys;
+        activeExpireCycleFields(type, config_keys_per_loop, endtime);
+        activeExpireCycleKeys(type, config_keys_per_loop, endtime);
     } else {
-        first = activeExpireCycleKeys;
-        second = activeExpireCycleFields;
-    }
-
-    long long start = ustime();
-    first(type, config_keys_per_loop, timelimit);
-    long long elapsed = ustime() - start;
-
-    if (elapsed < timelimit) {
-        second(type, config_keys_per_loop, timelimit);
+        activeExpireCycleKeys(type, config_keys_per_loop, endtime);
+        activeExpireCycleFields(type, config_keys_per_loop, endtime);
     }
 
     expireCycleStartWithFields = !expireCycleStartWithFields;
