@@ -469,6 +469,37 @@ static int defragRaxNode(raxNode **noderef) {
     return 0;
 }
 
+static void scanLaterHash(robj *ob, unsigned long *cursor) {
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    static robj *vsetObj = NULL;
+    static size_t vset_cursor = 0;
+    if (vsetObj != ob) vset_cursor = 0;  // Prevent stale state
+
+    if (vsetObj == ob && vset_cursor != 0) {
+        // We're already defragging volatile set
+        vset *vset = hashTypeGetVolatileSet(ob);
+        vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode);
+        if (vset_cursor == 0) {
+            vsetObj = NULL;
+        }
+        *cursor = vset_cursor;
+    } else {
+        hashtable *ht = ob->ptr;
+        size_t new_cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc,
+                                                HASHTABLE_SCAN_EMIT_REF);
+        *cursor = new_cursor;
+        if (new_cursor == 0 && hashTypeHasVolatileElements(ob)) {
+            vsetObj = ob;
+            vset *vset = hashTypeGetVolatileSet(vsetObj);
+            vset_cursor = vsetScanDefrag(vset, 0, activeDefragAlloc, defragRaxNode);
+            if (vset_cursor == 0) {
+                vsetObj = NULL;
+            }
+            *cursor = vset_cursor;
+        }
+    }
+}
+
 static void defragQuicklist(robj *ob) {
     quicklist *ql = ob->ptr, *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
@@ -538,37 +569,6 @@ static void defragSet(robj *ob) {
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
     if (new_hashtable) ob->ptr = new_hashtable;
-}
-
-static void scanLaterHash(robj *ob, unsigned long *cursor) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    static robj *vsetObj = NULL;
-    static size_t vset_cursor = 0;
-    if (vsetObj != ob) vset_cursor = 0;  // Prevent stale state
-
-    if (vsetObj == ob && vset_cursor != 0) {
-        // We're already defragging volatile set
-        vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode);
-        if (vset_cursor == 0) {
-            vsetObj = NULL;
-        }
-        *cursor = vset_cursor;
-    } else {
-        hashtable *ht = ob->ptr;
-        size_t new_cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc,
-                                                HASHTABLE_SCAN_EMIT_REF);
-        *cursor = new_cursor;
-        if (new_cursor == 0 && hashTypeHasVolatileElements(ob)) {
-            vsetObj = ob;
-            vset *vset = hashTypeGetVolatileSet(vsetObj);
-            vset_cursor = vsetScanDefrag(vset, 0, activeDefragAlloc, defragRaxNode);
-            if (vset_cursor == 0) {
-                vsetObj = NULL;
-            }
-            *cursor = vset_cursor;
-        }
-    }
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -839,7 +839,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
 
 /* returns 0 more work may or may not be needed (see non-zero cursor),
  * and 1 if time is up and more work is needed. */
-static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid, kvstore *kvs) {
+static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
     if (ob) {
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
@@ -885,7 +885,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         robj *ob = found;
 
         long long key_defragged = server.stat_active_defrag_hits;
-        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid, ctx->kvstate.kvs) == 1);
+        bool timeout = (defragLaterItem(ob, &defrag_later_cursor, endtime, ctx->dbid) == 1);
         if (key_defragged != server.stat_active_defrag_hits) {
             server.stat_active_defrag_key_hits++;
         } else {

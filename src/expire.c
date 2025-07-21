@@ -196,7 +196,6 @@ static void advanceDb(activeExpireFieldIterator *it) {
     it->current_db++;
     if (it->current_db >= server.dbnum) {
         it->current_db = 0;
-        serverDb *db = server.db[it->current_db];
         it->cursor = 0;
     }
 }
@@ -440,7 +439,7 @@ void activeExpireCycleKeys(int type, unsigned long keys_per_loop, monotime endti
                 }
                 if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
                     elapsed = ustime() - start;
-                    if (elapsed > endtime_us) {
+                    if ((monotime) elapsed > endtime_us) {
                         timelimit_exit = 1;
                         server.stat_expired_time_cap_reached_count++;
                         break;
