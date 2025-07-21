@@ -2786,7 +2786,6 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    // TODO xbasel create new type for keys_with_volatile_items, to be identical to kvstoreExpiresHashtableType
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
