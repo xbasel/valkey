@@ -2212,7 +2212,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
             if (rdbtype == RDB_TYPE_HASH_2 && itemexpiry > 0) {
                 // We don't pass db as we don't have it. DB level tracking is done in rdbLoadRioWithLoadingCtx.
-                hashTypeTrackEntry(NULL, o, entry);
+                hashTypeTrackEntry(o, entry);
             }
         }
 

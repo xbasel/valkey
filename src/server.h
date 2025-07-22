@@ -3341,9 +3341,9 @@ robj *setTypeDup(robj *o);
 
 void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 void hashTypeFreeVolatileSet(robj *o);
-void hashTypeTrackEntry(serverDb *db, robj *o, void *entry);
-void hashTypeUntrackEntry(serverDb *db, robj *o, void *entry);
-void hashTypeTrackUpdateEntry(serverDb *db, robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+void hashTypeTrackEntry(robj *o, void *entry);
+void hashTypeUntrackEntry(robj *o, void *entry);
+void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 vset *hashTypeGetVolatileSet(robj *o);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **));
@@ -3351,7 +3351,7 @@ unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxN
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
 int hashTypeExists(robj *o, sds key);
-int hashTypeDelete(serverDb *db, robj *o, sds key);
+int hashTypeDelete(robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
@@ -3366,7 +3366,7 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(serverDb *db, robj *o, sds field, sds value, long long expiry, int flags);
+int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileElements(robj *o);
 
@@ -3546,6 +3546,7 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
 void dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolaItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o);
+void dbAdjustHashObjectTracking(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

@@ -464,6 +464,17 @@ robj *dbRandomKey(serverDb *db) {
 }
 
 /* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
+void dbAdjustHashObjectTracking(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH) {
+        if (hashTypeHasVolatileElements(o)) {
+            dbTrackKeyWithVolaItems(db, o);
+        } else {
+            dbUntrackKeyWithVolaItems(db, o);
+        }
+    }
+}
+
+/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
 void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
         dbTrackKeyWithVolaItems(db, o);

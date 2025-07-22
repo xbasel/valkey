@@ -452,7 +452,7 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
         /* In case the entry is tracked we need to update it in the volatile set */
         if (entryHasExpiry(new_entry)) {
             // We don't need to pass the db because db-level tracking isn't going to change for this update.
-            hashTypeTrackUpdateEntry(NULL, privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
         }
         *entry_ref = new_entry;
     }
