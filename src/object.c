@@ -226,7 +226,7 @@ robj *createStringObject(const char *ptr, size_t len) {
 }
 
 /* Similar to createStringObject() but takes an existing SDS as input. */
-robj *createStringObjectFromSds(sds s) {
+robj *createStringObjectFromSds(const sds s) {
     return createStringObject(s, sdslen(s));
 }
 

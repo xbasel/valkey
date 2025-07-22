@@ -287,6 +287,10 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     val = objectSetKeyAndExpire(val, key, -1);
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
+
+    /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
+    dbTrackKeyWithVolatileItemsIfNeeded(db, val);
+
     *valref = val;
     return 1;
 }
