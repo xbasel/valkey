@@ -439,7 +439,7 @@ void activeExpireCycleKeys(int type, unsigned long keys_per_loop, monotime endti
                 }
                 if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
                     elapsed = ustime() - start;
-                    if (elapsed > (long) endtime_us) {
+                    if (elapsed > (long)endtime_us) {
                         timelimit_exit = 1;
                         server.stat_expired_time_cap_reached_count++;
                         break;

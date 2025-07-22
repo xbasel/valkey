@@ -473,7 +473,7 @@ static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     static robj *vsetObj = NULL;
     static size_t vset_cursor = 0;
-    if (vsetObj != ob) vset_cursor = 0;  // Prevent stale state
+    if (vsetObj != ob) vset_cursor = 0; // Prevent stale state
 
     if (vsetObj == ob && vset_cursor != 0) {
         // We're already defragging volatile set

@@ -855,18 +855,18 @@ typedef struct replBufBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct serverDb {
-    kvstore *keys;                                 /* The keyspace for this DB */
-    kvstore *expires;                              /* Timeout of keys with a timeout set */
-    kvstore *keys_with_volatile_items;             /* Keys with volatile items */
-    dict *blocking_keys;                           /* Keys with clients waiting for data (BLPOP)*/
-    dict *blocking_keys_unblock_on_nokey;          /* Keys with clients waiting for
-                                                    * data, and should be unblocked if key is deleted (XREADEDGROUP).
-                                                    * This is a subset of blocking_keys*/
-    dict *ready_keys;                              /* Blocked keys that received a PUSH */
-    dict *watched_keys;                            /* WATCHED keys for MULTI/EXEC CAS */
-    int id;                                        /* Database ID */
-    long long avg_ttl;                             /* Average TTL, just for stats */
-    unsigned long expires_cursor;                  /* Cursor of the keys active expire cycle. */
+    kvstore *keys;                        /* The keyspace for this DB */
+    kvstore *expires;                     /* Timeout of keys with a timeout set */
+    kvstore *keys_with_volatile_items;    /* Keys with volatile items */
+    dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
+    dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
+                                           * data, and should be unblocked if key is deleted (XREADEDGROUP).
+                                           * This is a subset of blocking_keys*/
+    dict *ready_keys;                     /* Blocked keys that received a PUSH */
+    dict *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
+    int id;                               /* Database ID */
+    long long avg_ttl;                    /* Average TTL, just for stats */
+    unsigned long expires_cursor;         /* Cursor of the keys active expire cycle. */
 } serverDb;
 
 /* forward declaration for functions ctx */

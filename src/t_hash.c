@@ -1014,7 +1014,7 @@ void hdelCommand(client *c) {
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
-    bool hash_volatile_items  = hashTypeHasVolatileElements(o);
+    bool hash_volatile_items = hashTypeHasVolatileElements(o);
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
