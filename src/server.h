@@ -2616,7 +2616,6 @@ typedef struct {
 
 #define OBJ_HASH_FIELD 1
 #define OBJ_HASH_VALUE 2
-#define OBJ_HASH_EXPIRY
 
 /*-----------------------------------------------------------------------------
  * Extern declarations
@@ -3341,16 +3340,12 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 void hashTypeFreeVolatileSet(robj *o);
 void hashTypeTrackEntry(robj *o, void *entry);
 void hashTypeUntrackEntry(robj *o, void *entry);
 void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
-vset *hashTypeGetVolatileSet(robj *o);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
-unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **));
-size_t defragHashObjectIncremental(robj *ob, size_t cursor);
-void defragHashObject(robj *ob);
+size_t hashTypeScanDefrag(robj *ob, size_t cursor);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
@@ -3525,6 +3520,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);
 int dbDelete(serverDb *db, robj *key);
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
+void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */

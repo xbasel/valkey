@@ -46,7 +46,7 @@
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
 
-vset *hashTypeGetVolatileSet(robj *o) {
+static vset *hashTypeGetVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     return (vset *)hashtableMetadata(o->ptr);
 }
@@ -1663,7 +1663,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     if (expired || updated) {
-        if (has_volatile_fields || hashTypeHasVolatileElements(obj)) {
+        if (has_volatile_fields != hashTypeHasVolatileElements(obj)) {
             dbAdjustHashObjectTracking(c->db, obj);
         }
         if (expired) {
@@ -2176,6 +2176,7 @@ static int buildExpireFieldsArgv(void **entries, int n_entries, robj *o, robj *a
  *
  * Returns the number of expired fields removed.
  */
+/* TODO xbasel move to expire.c */
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
@@ -2252,13 +2253,6 @@ void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o) {
     }
 }
 
-unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **)) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    if (!hashTypeHasVolatileElements(ob)) return 0;
-    vset *vset = hashTypeGetVolatileSet(ob);
-    return vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);
-}
-
 /* Hashtable scan callback for hash datatype */
 static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     entry **entry_ref = (entry **)element_ref;
@@ -2276,23 +2270,21 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     }
 }
 
-size_t defragHashObjectIncremental(robj *ob, size_t cursor) {
+size_t hashTypeScanDefrag(robj *ob, size_t cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     static struct volatileSetCursor {
-        robj *o;
         size_t cursor;
         bool is_vsetDefrag;
     } volaSetIter;
     static struct volatileSetCursor *vset_cursor = NULL;
+
     vset_cursor = (struct volatileSetCursor *) cursor;
 
     if (!vset_cursor) {
+        // New object scan
         vset_cursor = &volaSetIter;
-        vset_cursor->o = ob;
         vset_cursor->cursor = 0;
         vset_cursor->is_vsetDefrag = false;
-    } else {
-        serverAssert(ob==vset_cursor->o);
     }
 
     if (!vset_cursor->is_vsetDefrag) {
@@ -2300,26 +2292,21 @@ size_t defragHashObjectIncremental(robj *ob, size_t cursor) {
         vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, activeDefragHashTypeEntry, ob,
                                                   activeDefragAlloc,
                                                   HASHTABLE_SCAN_EMIT_REF);
-        if (vset_cursor->cursor == 0 && hashTypeHasVolatileElements(vset_cursor->o)) {
+        if (vset_cursor->cursor == 0 && hashTypeHasVolatileElements(ob)) {
+            /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */
             vset_cursor->is_vsetDefrag = true;
         } else {
+            /* We're done with this object. */
             return 0;
         }
     } else {
-        // We're already defragging volatile set
+        /* We're already defragging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc, defragRaxNode);
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
         if (vset_cursor->cursor == 0) {
+            /* We're done with this hash object. */
             return 0;
         }
     }
     return (long) vset_cursor;
-}
-
-void defragHashObject(robj *ob) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    size_t cursor = 0;
-    do {
-        cursor = defragHashObjectIncremental(ob, cursor);
-    } while (cursor != 0);
 }

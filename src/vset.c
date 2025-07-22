@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "server.h"
+
 /*************************************************************************************************************
  *                                pVector Implementation
  *************************************************************************************************************/
@@ -2082,7 +2084,7 @@ static size_t vsetBucketDefrag_RAX(vsetBucket **bucket, size_t cursor, void *(*d
     return (size_t)state;
 }
 
-size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNode)(raxNode **)) {
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *)) {
     switch (vsetBucketType(*set)) {
     case VSET_BUCKET_NONE:
     case VSET_BUCKET_SINGLE:

@@ -441,21 +441,9 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
-
-
-/* Defrag callback for radix tree iterator, called for each node,
- * used in order to defrag the nodes allocations. */
-int defragRaxNode(raxNode **noderef) {
-    raxNode *newnode = activeDefragAlloc(*noderef);
-    if (newnode) {
-        *noderef = newnode;
-        return 1;
-    }
-    return 0;
-}
-
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
-    *cursor = defragHashObjectIncremental(ob, *cursor);
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    *cursor = hashTypeScanDefrag(ob, *cursor);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -498,7 +486,10 @@ static void defragHash(robj *ob) {
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
-        defragHashObject(ob);
+        size_t cursor = 0;
+        do {
+            cursor = hashTypeScanDefrag(ob, cursor);
+        } while (cursor != 0);
     }
 }
 
@@ -516,6 +507,17 @@ static void defragSet(robj *ob) {
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
     if (new_hashtable) ob->ptr = new_hashtable;
+}
+
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -1317,6 +1319,15 @@ robj *activeDefragStringOb(robj *ob) {
 }
 
 void defragWhileBlocked(void) {
+}
+
+int defragRaxNode(raxNode **noderef) {
+    UNUSED(noderef);
+    return 0;
+}
+
+sds activeDefragSds(sds sdsptr) {
+    return sdsptr;
 }
 
 #endif
