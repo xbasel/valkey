@@ -3295,6 +3295,8 @@ void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
 void rejectCommandFormat(client *c, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
+sds activeDefragSds(sds sdsptr);
+int defragRaxNode(raxNode **noderef);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
@@ -3347,6 +3349,8 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
 vset *hashTypeGetVolatileSet(robj *o);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxNode)(raxNode **));
+size_t defragHashObjectIncremental(robj *ob, size_t cursor);
+void defragHashObject(robj *ob);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);

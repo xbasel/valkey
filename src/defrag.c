@@ -196,7 +196,7 @@ void *activeDefragAlloc(void *ptr) {
  * Returns NULL in case the allocation wasn't moved.
  * When it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-static sds activeDefragSds(sds sdsptr) {
+sds activeDefragSds(sds sdsptr) {
     void *ptr = sdsAllocPtr(sdsptr);
     void *newptr = activeDefragAlloc(ptr);
     if (newptr) {
@@ -441,26 +441,11 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
-/* Hashtable scan callback for hash datatype */
-static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
-    entry **entry_ref = (entry **)element_ref;
-    entry *old_entry = *entry_ref, *new_entry = NULL;
-    long long old_expiry = entryGetExpiry(old_entry);
 
-    new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
-    if (new_entry) {
-        /* In case the entry is tracked we need to update it in the volatile set */
-        if (entryHasExpiry(new_entry)) {
-            // We don't need to pass the db because db-level tracking isn't going to change for this update.
-            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
-        }
-        *entry_ref = new_entry;
-    }
-}
 
 /* Defrag callback for radix tree iterator, called for each node,
  * used in order to defrag the nodes allocations. */
-static int defragRaxNode(raxNode **noderef) {
+int defragRaxNode(raxNode **noderef) {
     raxNode *newnode = activeDefragAlloc(*noderef);
     if (newnode) {
         *noderef = newnode;
@@ -470,34 +455,7 @@ static int defragRaxNode(raxNode **noderef) {
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    static robj *vsetObj = NULL;
-    static size_t vset_cursor = 0;
-    if (vsetObj != ob) vset_cursor = 0; // Prevent stale state
-
-    if (vsetObj == ob && vset_cursor != 0) {
-        // We're already defragging volatile set
-        vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode);
-        if (vset_cursor == 0) {
-            vsetObj = NULL;
-        }
-        *cursor = vset_cursor;
-    } else {
-        hashtable *ht = ob->ptr;
-        size_t new_cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc,
-                                                HASHTABLE_SCAN_EMIT_REF);
-        *cursor = new_cursor;
-        if (new_cursor == 0 && hashTypeHasVolatileElements(ob)) {
-            vsetObj = ob;
-            vset *vset = hashTypeGetVolatileSet(vsetObj);
-            vset_cursor = vsetScanDefrag(vset, 0, activeDefragAlloc, defragRaxNode);
-            if (vset_cursor == 0) {
-                vsetObj = NULL;
-            }
-            *cursor = vset_cursor;
-        }
-    }
+    *cursor = defragHashObjectIncremental(ob, *cursor);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -540,18 +498,7 @@ static void defragHash(robj *ob) {
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
-        unsigned long cursor = 0;
-        do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragHashTypeEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-        } while (cursor != 0);
-    }
-    /* defrag the hashtable struct and tables */
-    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (new_hashtable) ob->ptr = new_hashtable;
-    if (hashTypeHasVolatileElements(ob)) {
-        vset *vset = hashTypeGetVolatileSet(ob);
-        size_t vset_cursor = 0;
-        while ((vset_cursor = vsetScanDefrag(vset, vset_cursor, activeDefragAlloc, defragRaxNode)) != 0);
+        defragHashObject(ob);
     }
 }
 

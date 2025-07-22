@@ -2258,3 +2258,68 @@ unsigned long scanLaterHashVset(robj *ob, unsigned long cursor, int (*defragRaxN
     vset *vset = hashTypeGetVolatileSet(ob);
     return vsetScanDefrag(vset, cursor, activeDefragAlloc, defragRaxNode);
 }
+
+/* Hashtable scan callback for hash datatype */
+static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
+    entry **entry_ref = (entry **)element_ref;
+    entry *old_entry = *entry_ref, *new_entry = NULL;
+    long long old_expiry = entryGetExpiry(old_entry);
+
+    new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
+    if (new_entry) {
+        /* In case the entry is tracked we need to update it in the volatile set */
+        if (entryHasExpiry(new_entry)) {
+            // We don't need to pass the db because db-level tracking isn't going to change for this update.
+            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+        }
+        *entry_ref = new_entry;
+    }
+}
+
+size_t defragHashObjectIncremental(robj *ob, size_t cursor) {
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    static struct volatileSetCursor {
+        robj *o;
+        size_t cursor;
+        bool is_vsetDefrag;
+    } volaSetIter;
+    static struct volatileSetCursor *vset_cursor = NULL;
+    vset_cursor = (struct volatileSetCursor *) cursor;
+
+    if (!vset_cursor) {
+        vset_cursor = &volaSetIter;
+        vset_cursor->o = ob;
+        vset_cursor->cursor = 0;
+        vset_cursor->is_vsetDefrag = false;
+    } else {
+        serverAssert(ob==vset_cursor->o);
+    }
+
+    if (!vset_cursor->is_vsetDefrag) {
+        hashtable *ht = ob->ptr;
+        vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, activeDefragHashTypeEntry, ob,
+                                                  activeDefragAlloc,
+                                                  HASHTABLE_SCAN_EMIT_REF);
+        if (vset_cursor->cursor == 0 && hashTypeHasVolatileElements(vset_cursor->o)) {
+            vset_cursor->is_vsetDefrag = true;
+        } else {
+            return 0;
+        }
+    } else {
+        // We're already defragging volatile set
+        vset *vset = hashTypeGetVolatileSet(ob);
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc, defragRaxNode);
+        if (vset_cursor->cursor == 0) {
+            return 0;
+        }
+    }
+    return (long) vset_cursor;
+}
+
+void defragHashObject(robj *ob) {
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    size_t cursor = 0;
+    do {
+        cursor = defragHashObjectIncremental(ob, cursor);
+    } while (cursor != 0);
+}
