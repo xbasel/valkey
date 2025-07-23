@@ -2787,13 +2787,12 @@ serverDb *createDatabase(int id) {
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
-    db->avg_ttl = 0;
+    memset(db->expiry, 0, sizeof(db->expiry));
     return db;
 }
 
@@ -6324,7 +6323,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
             if (keys || vkeys) {
                 info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl, keysvitems);
+                                    db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
     }

@@ -2302,7 +2302,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor) {
     } else {
         /* We're already defragging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc); // TODO check if handles NULL vset
         if (vset_cursor->cursor == 0) {
             /* We're done with this hash object. */
             return 0;

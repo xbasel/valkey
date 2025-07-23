@@ -35,6 +35,20 @@ typedef enum {
     POLICY_DELETE_EXPIRED /* Delete expired keys on access. */
 } expirationPolicy;
 
+/* Types of active expiry jobs. Used to track and orchestrate
+ * separate expiry mechanisms within the same database.
+ *
+ * KEYS:   Expiry of top-level keys via db->expires.
+ * FIELDS: Expiry of hash fields stored in volatile sets (e.g., per-field TTLs).
+ *
+ * ACTIVE_EXPIRY_TYPE_COUNT: Number of expiry types, used for sizing arrays and iteration.
+ */
+enum activeExpiryType {
+    KEYS,
+    FIELDS,
+    ACTIVE_EXPIRY_TYPE_COUNT
+};
+
 /* Forward declarations */
 typedef struct client client;
 typedef struct serverObject robj;
