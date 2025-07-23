@@ -2028,7 +2028,7 @@ struct valkeyServer {
     connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
     connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
     int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
-    char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
+    char *                              repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
     time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data;          /* Serve stale data when link is down? */
     int repl_replica_ro;                /* Replica is read only? */
@@ -3348,6 +3348,7 @@ void hashTypeUntrackEntry(robj *o, void *entry);
 void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 size_t hashTypeScanDefrag(robj *ob, size_t cursor);
+size_t hashTypeExtractExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
@@ -3522,7 +3523,6 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);
 int dbDelete(serverDb *db, robj *key);
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
-void dbUpdateKeyWithVolaItemsTracking(serverDb *db, robj *o);
 
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */
