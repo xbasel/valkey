@@ -419,7 +419,7 @@ int mock_defrag_rax_node(raxNode **noderef) {
 size_t defrag_vset(vset *set, size_t cursor, size_t steps) {
     if (steps == 0) steps = ULONG_MAX;
     do {
-        cursor = vsetScanDefrag(set, cursor, mock_defragfn);
+        cursor = vsetScanDefrag(set, cursor, mock_defragfn, mock_defrag_rax_node);
         steps--;
     } while (cursor != 0 && steps > 0);
     return cursor;

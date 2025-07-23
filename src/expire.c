@@ -1038,7 +1038,7 @@ static int buildExpireFieldsArgv(void **entries, size_t n_entries, robj *o, robj
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
     argv[argc++] = keyobj;      // key name
-    for (int i = 0; i < n_entries; i++) {
+    for (size_t i = 0; i < n_entries; i++) {
         // field to delete
         argv[argc++] = createStringObjectFromSds(entryGetField(entries[i]));
     }
@@ -1071,7 +1071,6 @@ static void freeArgvObjects(robj **argv, int argc) {
  *
  * Returns the number of expired fields removed.
  */
-/* TODO xbasel move to expire.c */
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
     /* Sanity check to prevent excessive stack allocation from large VLAs.
      * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */

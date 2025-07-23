@@ -360,6 +360,17 @@ static void activeDefragQuickListNodes(quicklist *ql) {
     }
 }
 
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+static int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
+}
+
 /* when the value has lots of elements, we want to handle it later and not as
  * part of the main dictionary scan. this is needed in order to prevent latency
  * spikes when handling large items */
@@ -443,7 +454,7 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    *cursor = hashTypeScanDefrag(ob, *cursor);
+    *cursor = hashTypeScanDefrag(ob, *cursor, defragRaxNode);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -488,7 +499,7 @@ static void defragHash(robj *ob) {
     } else {
         size_t cursor = 0;
         do {
-            cursor = hashTypeScanDefrag(ob, cursor);
+            cursor = hashTypeScanDefrag(ob, cursor, defragRaxNode);
         } while (cursor != 0);
     }
 }
@@ -507,17 +518,6 @@ static void defragSet(robj *ob) {
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
     if (new_hashtable) ob->ptr = new_hashtable;
-}
-
-/* Defrag callback for radix tree iterator, called for each node,
- * used in order to defrag the nodes allocations. */
-int defragRaxNode(raxNode **noderef) {
-    raxNode *newnode = activeDefragAlloc(*noderef);
-    if (newnode) {
-        *noderef = newnode;
-        return 1;
-    }
-    return 0;
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -1319,11 +1319,6 @@ robj *activeDefragStringOb(robj *ob) {
 }
 
 void defragWhileBlocked(void) {
-}
-
-int defragRaxNode(raxNode **noderef) {
-    UNUSED(noderef);
-    return 0;
 }
 
 sds activeDefragSds(sds sdsptr) {

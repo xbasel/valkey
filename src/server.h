@@ -3297,7 +3297,6 @@ int setOOMScoreAdj(int process_class);
 void rejectCommandFormat(client *c, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
-int defragRaxNode(raxNode **noderef);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
@@ -3347,7 +3346,7 @@ void hashTypeTrackEntry(robj *o, void *entry);
 void hashTypeUntrackEntry(robj *o, void *entry);
 void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
-size_t hashTypeScanDefrag(robj *ob, size_t cursor);
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNode **));
 size_t hashTypeExtractExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
 
 void hashTypeConvert(robj *o, int enc);

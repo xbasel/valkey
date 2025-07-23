@@ -2158,7 +2158,7 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     }
 }
 
-size_t hashTypeScanDefrag(robj *ob, size_t cursor) {
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNode **)) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     static struct volatileSetCursor {
         size_t cursor;
@@ -2188,9 +2188,9 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor) {
             return 0;
         }
     } else {
-        /* We're already defragging volatile set. */
+        /* We're already defraging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc); // TODO check if handles NULL vset
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc, defragRaxNodefn);
         if (vset_cursor->cursor == 0) {
             /* We're done with this hash object. */
             return 0;
