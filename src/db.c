@@ -196,13 +196,6 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
     }
 }
 
-/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
-void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
-        dbTrackKeyWithVolatileItems(db, o);
-    }
-}
-
 /* Untracks the key if it’s a hash with volatile fields, for field-level expiry. */
 void dbUntrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
@@ -244,7 +237,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     val = objectSetKeyAndExpire(val, key->ptr, -1);
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
-    dbTrackKeyWithVolatileItemsIfNeeded(db, val);
+    dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -314,7 +307,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     initObjectLRUOrLFU(val);
 
     /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
-    dbTrackKeyWithVolatileItemsIfNeeded(db, val);
+    dbTrackKeyWithVolatileItems(db, val);
 
     *valref = val;
     return 1;
@@ -538,8 +531,10 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore.  */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
-    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
-    kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
+        int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+        kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    }
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
