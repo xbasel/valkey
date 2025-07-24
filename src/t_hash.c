@@ -1019,7 +1019,7 @@ void hdelCommand(client *c) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
-                if (hash_volatile_items) dbUntrackKeyWithVolaItems(c->db, o);
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
                 dbDelete(c->db, c->argv[1]); /* Please note that this will also remove the tracking from the kvstore */
                 keyremoved = true;
                 break;
@@ -1028,7 +1028,7 @@ void hdelCommand(client *c) {
     }
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileElements(o)) {
-            dbAdjustHashObjectTracking(c->db, o);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
@@ -1082,7 +1082,7 @@ void hsetnxCommand(client *c) {
         bool has_volatile_fields = hashTypeHasVolatileElements(o);
         hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
         if (has_volatile_fields != hashTypeHasVolatileElements(o)) {
-            dbAdjustHashObjectTracking(c->db, o);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
@@ -1107,7 +1107,7 @@ void hsetCommand(client *c) {
         created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
     }
     if (has_volatile_fields != hashTypeHasVolatileElements(o)) {
-        dbAdjustHashObjectTracking(c->db, o);
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
@@ -1258,7 +1258,7 @@ void hsetexCommand(client *c) {
 
     if (changes) {
         if (has_volatile_fields != hashTypeHasVolatileElements(o)) {
-            dbAdjustHashObjectTracking(c->db, o);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
@@ -1458,7 +1458,7 @@ void hgetexCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
 
         if (has_volatile_fields != hashTypeHasVolatileElements(o)) {
-            dbAdjustHashObjectTracking(c->db, o);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
 
         /* Delete the object in case it was left empty */
@@ -1664,7 +1664,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     if (expired || updated) {
         if (has_volatile_fields != hashTypeHasVolatileElements(obj)) {
-            dbAdjustHashObjectTracking(c->db, obj);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, obj);
         }
         if (expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
@@ -1759,7 +1759,7 @@ void hpersistCommand(client *c) {
     }
     if (changes) {
         if (has_volatile_fields != hashTypeHasVolatileElements(hash)) {
-            dbAdjustHashObjectTracking(c->db, hash);
+            dbUpdateObjectWithVolatileItemsTracking(c->db, hash);
         }
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);

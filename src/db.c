@@ -185,6 +185,31 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
+/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
+void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH) {
+        if (hashTypeHasVolatileElements(o)) {
+            dbTrackKeyWithVolatileItems(db, o);
+        } else {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+    }
+}
+
+/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
+void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
+        dbTrackKeyWithVolatileItems(db, o);
+    }
+}
+
+/* Untracks the key if it’s a hash with volatile fields, for field-level expiry. */
+void dbUntrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
+        dbUntrackKeyWithVolatileItems(db, o);
+    }
+}
+
 /* Add a key-value entry to the DB.
  *
  * A copy of 'key' is stored in the database. The caller must ensure the
@@ -463,31 +488,6 @@ robj *dbRandomKey(serverDb *db) {
     }
 }
 
-/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
-void dbAdjustHashObjectTracking(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH) {
-        if (hashTypeHasVolatileElements(o)) {
-            dbTrackKeyWithVolaItems(db, o);
-        } else {
-            dbUntrackKeyWithVolaItems(db, o);
-        }
-    }
-}
-
-/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
-void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
-        dbTrackKeyWithVolaItems(db, o);
-    }
-}
-
-/* Untracks the key if it’s a hash with volatile fields, for field-level expiry. */
-void dbUntrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
-        dbUntrackKeyWithVolaItems(db, o);
-    }
-}
-
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &pos);
@@ -537,13 +537,13 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 }
 
 /* Add a key with volatile items to the tracking kvstore.  */
-void dbTrackKeyWithVolaItems(serverDb *db, robj *o) {
+void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
 }
 
 /* Delete a key from the keys with volatile entries tracking kvstore  */
-void dbUntrackKeyWithVolaItems(serverDb *db, robj *o) {
+void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }

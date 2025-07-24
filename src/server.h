@@ -3544,10 +3544,9 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
-void dbUntrackKeyWithVolaItems(serverDb *db, robj *o);
-void dbTrackKeyWithVolaItems(serverDb *db, robj *o);
-void dbTrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o);
-void dbAdjustHashObjectTracking(serverDb *db, robj *o);
+void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o);
+void dbTrackKeyWithVolatileItems(serverDb *db, robj *o);
+void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

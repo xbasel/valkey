@@ -1097,7 +1097,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
 
     if (!hashTypeHasVolatileElements(o)) {
         hashTypeFreeVolatileSet(o);
-        dbUntrackKeyWithVolaItems(db, o);
+        dbUntrackKeyWithVolatileItems(db, o);
     }
 
     /* Check if the entire key should be deleted. */
@@ -1115,7 +1115,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
         propagateFieldsDeletion(db, argv, argc);
         robj *keyobj = argv[1];
         notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-        if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolaItems(db, o);
+        if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
     }
     exitExecutionUnit();
     postExecutionUnitOperations();
