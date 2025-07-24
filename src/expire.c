@@ -133,8 +133,8 @@ typedef struct {
     int ttl_samples;       /* num keys with ttl not yet expired */
 
     /* Entry-specific fields */
-    unsigned long max_entries;       /* Max number of entries (e.g. fields) to expire during this scan */
-    bool has_more_expired_entries;   /* True if the hash likely has more fields to expire */
+    unsigned long max_entries;     /* Max number of entries (e.g. fields) to expire during this scan */
+    bool has_more_expired_entries; /* True if the hash likely has more fields to expire */
 } expireScanData;
 
 typedef struct activeExpireFieldIterator {
@@ -173,7 +173,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
         if (expired_fields == data->max_entries) {
             // TODO xbasel optmize with vsetEstimatedEarliestExpiry
             data->has_more_expired_entries = true;
-        }else {
+        } else {
             data->has_more_expired_entries = false;
         }
         data->expired++;
@@ -206,13 +206,13 @@ static kvstore *expiryKvstore(serverDb *db, int jobType) {
     if (!db) return NULL;
 
     switch (jobType) {
-        case KEYS:
-            return db->expires;
-        case FIELDS:
-            return db->keys_with_volatile_items;
-        default:
-            serverPanic("Unknown active expiry job type %d.", jobType);
-            return NULL; // unreachable
+    case KEYS:
+        return db->expires;
+    case FIELDS:
+        return db->keys_with_volatile_items;
+    default:
+        serverPanic("Unknown active expiry job type %d.", jobType);
+        return NULL; // unreachable
     }
 }
 
@@ -237,9 +237,9 @@ void activeExpireCycleKeys(enum activeExpiryType jobType, int cycleType, unsigne
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     typedef struct {
-        unsigned int current_db;    /* Next DB to test. */
-        int timelimit_exit;         /* Time limit hit in previous call? */
-        long long last_fast_cycle;  /* When last fast cycle ran. */
+        unsigned int current_db;   /* Next DB to test. */
+        int timelimit_exit;        /* Time limit hit in previous call? */
+        long long last_fast_cycle; /* When last fast cycle ran. */
     } expireState;
     static expireState _expire_state[2] = {0}; // [KEYS, FIELDS]
     expireState *state = &_expire_state[jobType];
@@ -1060,35 +1060,38 @@ static void freeArgvObjects(robj **argv, int argc) {
     }
 }
 
-/* Process expired fields for a hash key, deleting them,
- * and propagating changes to replicas and AOF.
- *
+/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
+  *
  * This routine:
- *  - identifies expired hash fields from a volatile set
- *  - deletes them
- *  - frees the entire key if the hash is empty
- *  - propagates HDEL commands if the hash object isn't empty, and propagates hash DEL if empty.
+ *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
+ *  - deletes the expired fields
+ *  - deletes the entire key if the hash becomes empty
+ *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
  *
- * Returns the number of expired fields removed. */
+ * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
+ * Returns the total number of expired fields removed. */
 #define EXPIRE_BULK_LIMIT 1024
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
     size_t total_expired = 0;
     bool deleteKey = false;
 
     while (max_entries > 0) {
+        /* Process in batches to avoid large stack allocations. */
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
         void *entries[EXPIRE_BULK_LIMIT];
         size_t expired = hashTypePopExpiredEntries(o, now, batch_size, entries);
         if (expired == 0) break;
 
-        robj *argv[EXPIRE_BULK_LIMIT + 2];
+        robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
         int argc = buildExpireFieldsArgv(entries, expired, o, argv);
 
+        /* Clean up volatile set if no more volatile fields remain */
         if (!hashTypeHasVolatileElements(o)) {
             hashTypeFreeVolatileSet(o);
             dbUntrackKeyWithVolatileItems(db, o);
         }
 
+        /* Check if key is now empty after removing expired fields */
         deleteKey = hashTypeLength(o) == 0;
 
         enterExecutionUnit(1, 0);
@@ -1113,7 +1116,7 @@ size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigne
 
         total_expired += expired;
         max_entries -= expired;
-        if (deleteKey) break;
+        if (deleteKey) break; /* Stop if key was deleted */
     }
 
     return total_expired;

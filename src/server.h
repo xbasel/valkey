@@ -866,8 +866,8 @@ typedef struct serverDb {
     dict *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
     int id;                               /* Database ID */
     struct {
-        long long avg_ttl;      /* Average TTL, just for stats */
-        unsigned long cursor;   /* Cursor of the active expire cycle. */
+        long long avg_ttl;    /* Average TTL, just for stats */
+        unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
 } serverDb;
 
@@ -2028,7 +2028,7 @@ struct valkeyServer {
     connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
     connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
     int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
-    char *                              repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
+    char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
     time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data;          /* Serve stale data when link is down? */
     int repl_replica_ro;                /* Replica is read only? */

@@ -2171,7 +2171,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
     } volaSetIter;
     static struct volatileSetCursor *vset_cursor = NULL;
 
-    vset_cursor = (struct volatileSetCursor *) cursor;
+    vset_cursor = (struct volatileSetCursor *)cursor;
 
     if (!vset_cursor) {
         // New object scan
@@ -2205,5 +2205,5 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
             return 0;
         }
     }
-    return (long) vset_cursor;
+    return (long)vset_cursor;
 }
