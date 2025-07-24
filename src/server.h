@@ -3517,7 +3517,6 @@ void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 #define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
 void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags);
 robj *dbRandomKey(serverDb *db);
-robj *dbRandomVolatileKey(serverDb *db);
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);
 int dbDelete(serverDb *db, robj *key);

@@ -185,7 +185,8 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* Tracks the key if it’s a hash with volatile fields, for field-level expiry. */
+/* For hash keys, checks if they contain volatile items and updates tracking accordingly.
+ * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH) {
         if (hashTypeHasVolatileElements(o)) {

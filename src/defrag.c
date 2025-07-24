@@ -497,7 +497,7 @@ static void defragHash(robj *ob) {
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
-        size_t cursor = 0;
+        unsigned long cursor = 0;
         do {
             cursor = hashTypeScanDefrag(ob, cursor, defragRaxNode);
         } while (cursor != 0);
