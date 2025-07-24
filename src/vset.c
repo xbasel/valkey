@@ -2084,7 +2084,18 @@ static size_t vsetBucketDefrag_RAX(vsetBucket **bucket, size_t cursor, void *(*d
     return (size_t)state;
 }
 
-size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNodefn)(raxNode **)) {
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+static int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
+}
+
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *)) {
     switch (vsetBucketType(*set)) {
     case VSET_BUCKET_NONE:
     case VSET_BUCKET_SINGLE:
@@ -2093,7 +2104,7 @@ size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (
     case VSET_BUCKET_VECTOR:
         return vsetBucketDefrag_VECTOR(set, cursor, defragfn);
     case VSET_BUCKET_RAX:
-        return vsetBucketDefrag_RAX(set, cursor, defragfn, defragRaxNodefn);
+        return vsetBucketDefrag_RAX(set, cursor, defragfn, defragRaxNode);
     default:
         panic("Unknown vset node type to defrag");
     }

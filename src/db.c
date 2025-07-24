@@ -197,13 +197,6 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
     }
 }
 
-/* Untracks the key if it’s a hash with volatile fields, for field-level expiry. */
-void dbUntrackKeyWithVolatileItemsIfNeeded(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
-        dbUntrackKeyWithVolatileItems(db, o);
-    }
-}
-
 /* Add a key-value entry to the DB.
  *
  * A copy of 'key' is stored in the database. The caller must ensure the
@@ -510,7 +503,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        dbUntrackKeyWithVolatileItemsIfNeeded(db, val);
+        if (val->type == OBJ_HASH && hashTypeHasVolatileElements(val)) {
+            dbUntrackKeyWithVolatileItems(db, val);
+        }
 
         if (async) {
             freeObjAsync(key, val, db->id);

@@ -6,8 +6,7 @@
 
 #include "hashtable.h"
 #include "rax.h"
-#include "sds.h"
-#include "monotonic.h" /* for mstime_t*/
+#include "util.h"
 
 /*
  *-----------------------------------------------------------------------------
@@ -312,6 +311,6 @@ void vsetClear(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 size_t vsetMemUsage(vset *set);
-size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNodefn)(raxNode **));
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));
 
 #endif

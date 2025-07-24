@@ -1069,60 +1069,52 @@ static void freeArgvObjects(robj **argv, int argc) {
  *  - frees the entire key if the hash is empty
  *  - propagates HDEL commands if the hash object isn't empty, and propagates hash DEL if empty.
  *
- * Returns the number of expired fields removed.
- */
+ * Returns the number of expired fields removed. */
+#define EXPIRE_BULK_LIMIT 1024
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
-    /* Sanity check to prevent excessive stack allocation from large VLAs.
-     * We expect max_entries to be a small, bounded number (e.g. ~1000 max), which ~8k. */
-    serverAssert(max_entries > 0 && max_entries <= 1024);
-
-
-    /* set to true if the key gets deleted. */
+    size_t total_expired = 0;
     bool deleteKey = false;
 
-    /* Temporary storage on stack for the entries and argv. */
-    void *entries[max_entries];
-    size_t expired = hashTypeExtractExpiredEntries(o, now, max_entries,entries);
+    while (max_entries > 0) {
+        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
+        void *entries[EXPIRE_BULK_LIMIT];
+        size_t expired = hashTypePopExpiredEntries(o, now, batch_size, entries);
+        if (expired == 0) break;
 
-    robj *argv[max_entries + 2]; // 2 extra slots for HDEL and key
-    int argc = 0;
+        robj *argv[EXPIRE_BULK_LIMIT + 2];
+        int argc = buildExpireFieldsArgv(entries, expired, o, argv);
 
-    if (expired == 0) {
-        goto cleanup;
+        if (!hashTypeHasVolatileElements(o)) {
+            hashTypeFreeVolatileSet(o);
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+
+        deleteKey = hashTypeLength(o) == 0;
+
+        enterExecutionUnit(1, 0);
+        if (deleteKey) {
+            robj *keyobj = argv[1];
+            dbDelete(db, keyobj);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            signalModifiedKey(NULL, db, keyobj);
+        } else {
+            propagateFieldsDeletion(db, argv, argc);
+            robj *keyobj = argv[1];
+            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+            if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
+        }
+        exitExecutionUnit();
+        postExecutionUnitOperations();
+
+        freeArgvObjects(argv, argc);
+        freeEntries(entries, expired);
+
+        total_expired += expired;
+        max_entries -= expired;
+        if (deleteKey) break;
     }
 
-    /* Build the argv for HDEL propagation */
-    argc = buildExpireFieldsArgv(entries, expired, o, argv);
-    serverAssert(argc >= 3); // Must contain valid HDEL command, HDEL key field ...
-
-    if (!hashTypeHasVolatileElements(o)) {
-        hashTypeFreeVolatileSet(o);
-        dbUntrackKeyWithVolatileItems(db, o);
-    }
-
-    /* Check if the entire key should be deleted. */
-    deleteKey = hashTypeLength(o) == 0;
-
-    enterExecutionUnit(1, 0);
-    if (deleteKey) {
-        robj *keyobj = argv[1]; // keyobj from buildExpireFieldsArgv
-        dbDelete(db, keyobj);
-        propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
-        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
-        signalModifiedKey(NULL, db, keyobj);
-    } else {
-        propagateFieldsDeletion(db, argv, argc);
-        robj *keyobj = argv[1];
-        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-        if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
-    }
-    exitExecutionUnit();
-    postExecutionUnitOperations();
-
-cleanup:
-    /* Cleanup argv objects and freed entries. */
-    freeArgvObjects(argv, argc);
-    freeEntries(entries, expired);
-    return expired;
+    return total_expired;
 }

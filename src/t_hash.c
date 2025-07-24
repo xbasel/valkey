@@ -544,7 +544,7 @@ int hashTypeDelete(robj *o, sds field) {
         void *entry = NULL;
         deleted = hashtablePop(ht, field, &entry);
         if (deleted) {
-            if (entryHasExpiry(entry)) hashTypeUntrackEntry(o, entry);
+            hashTypeUntrackEntry(o, entry);
             entryFree(entry);
         }
     } else {
@@ -2122,7 +2122,7 @@ static int expireEntry(void *entry, void *c) {
 
 /* Extract expired entries from a hash object's volatile set.
  * Returns number of expired entries, populates `out_entries`. */
-size_t hashTypeExtractExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries) {
+size_t hashTypePopExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries) {
     serverAssert(max_entries > 0 && max_entries <= 1024);
 
     /* skip TTL checks temporarily (to allow hashtable lookup) */
@@ -2158,8 +2158,13 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
     }
 }
 
-size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNode **)) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *)) {
+    if (ob->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *newzl;
+        if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
+        return 0;
+    }
+    serverAssert(ob->encoding == OBJ_ENCODING_HASHTABLE);
     static struct volatileSetCursor {
         size_t cursor;
         bool is_vsetDefrag;
@@ -2170,6 +2175,10 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNod
 
     if (!vset_cursor) {
         // New object scan
+        /* defrag the hashtable struct and tables */
+        hashtable *ht = ob->ptr;
+        hashtable *new_hashtable = hashtableDefragTables(ht, defragAllocfn);
+        if (new_hashtable) ob->ptr = new_hashtable;
         vset_cursor = &volaSetIter;
         vset_cursor->cursor = 0;
         vset_cursor->is_vsetDefrag = false;
@@ -2178,7 +2187,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNod
     if (!vset_cursor->is_vsetDefrag) {
         hashtable *ht = ob->ptr;
         vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, activeDefragHashTypeEntry, ob,
-                                                  activeDefragAlloc,
+                                                  defragAllocfn,
                                                   HASHTABLE_SCAN_EMIT_REF);
         if (vset_cursor->cursor == 0 && hashTypeHasVolatileElements(ob)) {
             /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */
@@ -2190,7 +2199,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNod
     } else {
         /* We're already defraging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
-        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc, defragRaxNodefn);
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
         if (vset_cursor->cursor == 0) {
             /* We're done with this hash object. */
             return 0;

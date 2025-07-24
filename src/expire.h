@@ -1,9 +1,8 @@
 #ifndef EXPIRE_H
 #define EXPIRE_H
 
-#include <time.h>
 #include <stdbool.h>
-#include "monotonic.h"
+#include "util.h"
 
 /* Special Expiry values */
 #define EXPIRY_NONE -1
@@ -52,10 +51,12 @@ enum activeExpiryType {
 /* Forward declarations */
 typedef struct client client;
 typedef struct serverObject robj;
+typedef struct serverDb serverDb;
 
 bool timestampIsExpired(mstime_t when);
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
+size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
 #endif

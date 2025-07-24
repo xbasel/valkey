@@ -3345,9 +3345,8 @@ void hashTypeFreeVolatileSet(robj *o);
 void hashTypeTrackEntry(robj *o, void *entry);
 void hashTypeUntrackEntry(robj *o, void *entry);
 void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
-size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
-size_t hashTypeScanDefrag(robj *ob, size_t cursor, int (*defragRaxNodefn)(raxNode **));
-size_t hashTypeExtractExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
+size_t hashTypePopExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);

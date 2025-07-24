@@ -360,17 +360,6 @@ static void activeDefragQuickListNodes(quicklist *ql) {
     }
 }
 
-/* Defrag callback for radix tree iterator, called for each node,
- * used in order to defrag the nodes allocations. */
-static int defragRaxNode(raxNode **noderef) {
-    raxNode *newnode = activeDefragAlloc(*noderef);
-    if (newnode) {
-        *noderef = newnode;
-        return 1;
-    }
-    return 0;
-}
-
 /* when the value has lots of elements, we want to handle it later and not as
  * part of the main dictionary scan. this is needed in order to prevent latency
  * spikes when handling large items */
@@ -454,7 +443,7 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    *cursor = hashTypeScanDefrag(ob, *cursor, defragRaxNode);
+    *cursor = hashTypeScanDefrag(ob, *cursor, activeDefragAlloc);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -492,14 +481,13 @@ static void defragZsetSkiplist(robj *ob) {
 }
 
 static void defragHash(robj *ob) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
+    if (ob->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
         unsigned long cursor = 0;
         do {
-            cursor = hashTypeScanDefrag(ob, cursor, defragRaxNode);
+            cursor = hashTypeScanDefrag(ob, cursor, activeDefragAlloc);
         } while (cursor != 0);
     }
 }
@@ -518,6 +506,17 @@ static void defragSet(robj *ob) {
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
     if (new_hashtable) ob->ptr = new_hashtable;
+}
+
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+static int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
@@ -725,13 +724,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             serverPanic("Unknown sorted set encoding");
         }
     } else if (ob->type == OBJ_HASH) {
-        if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
-        } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            defragHash(ob);
-        } else {
-            serverPanic("Unknown hash encoding");
-        }
+        defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
     } else if (ob->type == OBJ_MODULE) {

@@ -407,19 +407,10 @@ void *mock_defragfn(void *ptr) {
     return newptr;
 }
 
-int mock_defrag_rax_node(raxNode **noderef) {
-    raxNode *newnode = mock_defragfn(*noderef);
-    if (newnode) {
-        *noderef = newnode;
-        return 1;
-    }
-    return 0;
-}
-
 size_t defrag_vset(vset *set, size_t cursor, size_t steps) {
     if (steps == 0) steps = ULONG_MAX;
     do {
-        cursor = vsetScanDefrag(set, cursor, mock_defragfn, mock_defrag_rax_node);
+        cursor = vsetScanDefrag(set, cursor, mock_defragfn);
         steps--;
     } while (cursor != 0 && steps > 0);
     return cursor;
