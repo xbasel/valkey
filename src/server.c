@@ -7340,7 +7340,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 }
 
 /*
- * The parseExtendedStringArgumentsOrReply() function performs the common validation for extended
+ * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
  * command arguments used in STRING and HASH commands.
  *
  * Get specific command extended options - PERSIST/DEL
