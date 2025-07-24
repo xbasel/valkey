@@ -1819,7 +1819,7 @@ long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry) {
         return -1;
         break;
     case VSET_BUCKET_RAX: {
-        rax *r = vsetBucketRax(set);
+        rax *r = vsetBucketRax(*set);
         raxIterator it;
         raxStart(&it, r);
         expiry = decodeExpiryKey(it.key);

@@ -2792,7 +2792,7 @@ serverDb *createDatabase(int id) {
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
-    memset(db->expiry, 0, sizeof(db->expiry));
+    resetDbExpiryState(db);
     return db;
 }
 

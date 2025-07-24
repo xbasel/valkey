@@ -124,14 +124,6 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
     }
 }
 
-static inline void debugLogField(robj *key, void *entry) {
-    if (1 <= LL_VERBOSE) {
-        sds key2 = objectGetKey(key);
-        serverLog(LL_WARNING, "key %s field %s value %s expired",
-                  key2, entryGetField(entry), entryGetValue(entry));
-    }
-}
-
 bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
     UNUSED(ht);
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
@@ -2112,7 +2104,6 @@ static int expireEntry(void *entry, void *c) {
     int deleted = hashtablePop(ht, entry, &entry_ptr);
 
     if (deleted) {
-        debugLogField(o, entry_ptr);
         ctxAddEntry(ctx, entry_ptr);
         server.stat_expiredfields++;
         return 1;
@@ -2206,4 +2197,9 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
         }
     }
     return (long)vset_cursor;
+}
+
+long long hashTypeEstimatedEarliestExpiry(robj *o) {
+    vset*vset = hashTypeGetVolatileSet(o);
+    return vsetEstimatedEarliestExpiry(vset, entryGetExpiry);
 }

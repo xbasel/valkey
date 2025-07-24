@@ -594,6 +594,17 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     return o;
 }
 
+/* Reset the expiry tracking state of a database.
+ *
+ * This clears the `expiry` array, which holds per-expiry-type
+ * data such as average TTL (for stats) and scan cursors used by
+ * the active expiration cycle.
+ *
+ * Should be called whenever the database is emptied or reinitialized. */
+void resetDbExpiryState(serverDb *db) {
+    memset(db->expiry, 0, sizeof(db->expiry));
+}
+
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
@@ -623,7 +634,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
             kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
-        memset(dbarray[j]->expiry, 0, sizeof(dbarray[j]->expiry));
+        resetDbExpiryState(dbarray[j]);
     }
 
     return removed;
@@ -1660,6 +1671,12 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictReleaseIterator(di);
 }
 
+/* Copy expiry tracking state from one DB to another.
+ *
+ * This copies the `expiry` array, which contains per-expiry-type
+ * metadata such as the average TTL (for stats) and the active
+ * expiry scan cursor.
+ */
 static void copyDbExpiry(serverDb *target, const serverDb *source) {
     memcpy(target->expiry, source->expiry, sizeof(target->expiry));
 }

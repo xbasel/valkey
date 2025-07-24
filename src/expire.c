@@ -159,19 +159,16 @@ void expireScanCallback(void *privdata, void *entry) {
     data->sampled++;
 }
 
-/* Callback used during hash field expiry kvstore scan to process a hash key with volatile fields.
- * Validates that the key has volatile elements, then processes it for active expiration.
- * Expires up to ctx->batch_Size fields per call.
- * Called with each key during the expiration cycle scan.
- */
+/* Expires up to `max_entries` fields from a hash with volatile fields.
+ * Sets `has_more_expired_entries` if more remain. Updates stats. */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
     expireScanData *data = privdata;
     serverAssert(volaKey);
     serverAssert(hashTypeHasVolatileElements(volaKey));
-    size_t expired_fields = hashTypeReclaimExpiredFields(volaKey, data->db, mstime(), data->max_entries);
+    mstime_t now = mstime();
+    size_t expired_fields = hashTypeReclaimExpiredFields(volaKey, data->db, now, data->max_entries);
     if (expired_fields) {
         if (expired_fields == data->max_entries) {
-            // TODO xbasel optmize with vsetEstimatedEarliestExpiry
             data->has_more_expired_entries = true;
         } else {
             data->has_more_expired_entries = false;
