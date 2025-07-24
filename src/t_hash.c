@@ -2200,6 +2200,6 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
 }
 
 long long hashTypeEstimatedEarliestExpiry(robj *o) {
-    vset*vset = hashTypeGetVolatileSet(o);
+    vset *vset = hashTypeGetVolatileSet(o);
     return vsetEstimatedEarliestExpiry(vset, entryGetExpiry);
 }
