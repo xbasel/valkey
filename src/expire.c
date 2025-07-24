@@ -1058,7 +1058,7 @@ static void freeArgvObjects(robj **argv, int argc) {
 }
 
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
-  *
+ *
  * This routine:
  *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
  *  - deletes the expired fields
