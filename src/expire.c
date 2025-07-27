@@ -280,7 +280,7 @@ void activeExpireCycleKeys(enum activeExpiryType jobType, int cycleType, unsigne
      * 3) All databases have been traversed. */
     for (j = 0; dbs_performed < dbs_per_call && state->timelimit_exit == 0 && j < server.dbnum; j++) {
         /* Scan callback data including expired and checked count per iteration. */
-        expireScanData data;
+        expireScanData data = {0};
         data.ttl_sum = 0;
         data.ttl_samples = 0;
         data.max_entries = keys_per_loop * 4;
