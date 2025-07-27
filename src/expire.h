@@ -20,6 +20,9 @@
 #define EXPIRE_GT (1 << 2)
 #define EXPIRE_LT (1 << 3)
 
+/* Maximum number of fields to active-expire (per replicated HDEL command */
+#define EXPIRE_BULK_LIMIT 1024
+
 /* Return values for expireIfNeeded */
 typedef enum {
     KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even nonexistent key. */
@@ -56,7 +59,6 @@ typedef struct serverDb serverDb;
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
-size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
 /* Handling of expired keys and hash fields */
 void activeExpireCycle(int type);

@@ -2114,7 +2114,8 @@ static int expireEntry(void *entry, void *c) {
 
 /* Extract expired entries from a hash object's volatile set.
  * Returns number of expired entries, populates `out_entries`. */
-size_t hashTypePopExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries) {
+size_t hashTypePopExpiredFields(robj *o, mstime_t now, unsigned long max_entries, void **out_entries) {
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     serverAssert(max_entries > 0 && max_entries <= 1024);
 
     /* skip TTL checks temporarily (to allow hashtable lookup) */
@@ -2130,6 +2131,9 @@ size_t hashTypePopExpiredEntries(robj *o, mstime_t now, unsigned long max_entrie
     size_t expired = vsetPopExpired(vset, entryGetExpiry, expireEntry, now, max_entries, &ctx);
     serverAssert(ctx.n_entries <= max_entries);
     hashTypeIgnoreTTL(o, 0);
+    if (!hashTypeHasVolatileElements(o)) {
+        hashTypeFreeVolatileSet(o);
+    }
     return expired;
 }
 

@@ -167,7 +167,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     serverAssert(o);
     serverAssert(hashTypeHasVolatileElements(o));
     mstime_t now = server.mstime;
-    size_t expired_fields = hashTypeReclaimExpiredFields(o, data->db, now, data->max_entries);
+    size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
@@ -197,6 +197,9 @@ static int activeExpireEffort(void) {
 }
 
 long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
+
+    if (timelimit_us <= 0) return 0;
+
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
@@ -226,9 +229,9 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
          * for time limit, unless the percentage of estimated stale keys is
          * too high. Also never repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
-        if (!state->timelimit_exit && server.stat_expired_stale_perc < config_cycle_acceptable_stale) return;
+        if (!state->timelimit_exit && server.stat_expired_stale_perc < config_cycle_acceptable_stale) return 0;
 
-        if (start < state->last_fast_cycle + (long long)config_cycle_fast_duration * 2) return;
+        if (start < state->last_fast_cycle + (long long)config_cycle_fast_duration * 2) return 0;
 
         state->last_fast_cycle = start;
     }
@@ -292,7 +295,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
             }
         }
 
-        if (kvstoreSize(kvs)) dbs_performed++;
+        if (db && kvstoreSize(kvs)) dbs_performed++;
 
         /* Continue to expire if at the end of the cycle there are still
          * a big percentage of keys to expire, compared to the number of keys
@@ -340,12 +343,8 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
                 cursor = kvstoreScan(kvs, cursor, -1, scan_cb,
                                      isExpiryTableValidForSamplingCb, &data);
                 if (!data.has_more_expired_entries) db->expiry[jobType].cursor = cursor;
-                if (db->expiry[jobType].cursor == 0) {
-                    if (jobType == FIELDS) {
-                        db_done = data.has_more_expired_entries ? 0 : 1;
-                    } else {
-                        db_done = 1;
-                    }
+                if (db->expiry[jobType].cursor == 0 && !data.has_more_expired_entries) {
+                    db_done = 1;
                     break;
                 }
                 checked_buckets++;
@@ -424,7 +423,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
         current_perc = 0;
     server.stat_expired_stale_perc = (current_perc * 0.05) + (server.stat_expired_stale_perc * 0.95);
 
-    return ustime() - start;
+    return now - start;
 }
 
 /*
@@ -486,10 +485,10 @@ void activeExpireCycle(int type) {
 
     if (expireCycleStartWithFields) {
         timelimit_us -= activeExpireCycleJob(FIELDS, type, timelimit_us);
-        if (timelimit_us > 0) activeExpireCycleJob(KEYS, type, timelimit_us);
+        activeExpireCycleJob(KEYS, type, timelimit_us);
     } else {
         timelimit_us -= activeExpireCycleJob(KEYS, type, timelimit_us);
-        if (timelimit_us > 0) activeExpireCycleJob(FIELDS, type, timelimit_us);
+        activeExpireCycleJob(FIELDS, type, timelimit_us);
     }
 
     expireCycleStartWithFields = !expireCycleStartWithFields;
@@ -999,110 +998,4 @@ expirationPolicy getExpirationPolicyWithFlags(int flags) {
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return POLICY_KEEP_EXPIRED;
 
     return POLICY_DELETE_EXPIRED;
-}
-
-/* Propagate hash field deletions to replicas and AOF. */
-static void propagateFieldsDeletion(serverDb *db, robj **argv, int argc) {
-    /* If the primary decided to delete a hash field we must propagate it to replicas no matter what.
-     * Even if module executed a command without asking for propagation. */
-    int prev_replication_allowed = server.replication_allowed;
-    server.replication_allowed = 1;
-    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
-    server.replication_allowed = prev_replication_allowed;
-}
-
-/* Build argv array for propagating HDEL of expired hash fields.
- * argv[0] = shared.hdel
- * argv[1] = key object
- * argv[2..] = field names to delete
- * Allocates a new key object, but *does not* free it — the caller must later.
- * Returns the final argc.
- */
-static int buildExpireFieldsArgv(void **entries, size_t n_entries, robj *o, robj *argv[]) {
-    int argc = 0;
-    robj *keyobj = createStringObjectFromSds(objectGetKey(o));
-    argv[argc++] = shared.hdel; // HDEL command
-    argv[argc++] = keyobj;      // key name
-    for (size_t i = 0; i < n_entries; i++) {
-        // field to delete
-        argv[argc++] = createStringObjectFromSds(entryGetField(entries[i]));
-    }
-    return argc;
-}
-
-/* Free all entry memory for a given list of expired entries. */
-static void freeEntries(void **entries, int n) {
-    for (int i = 0; i < n; i++) {
-        entryFree(entries[i]);
-    }
-}
-
-/* Free all robj references created in an argv list, except the shared command in slot 0. */
-static void freeArgvObjects(robj **argv, int argc) {
-    for (int i = 1; i < argc; i++) {
-        // skip 1, the shared command
-        decrRefCount(argv[i]);
-    }
-}
-
-/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
- *
- * This routine:
- *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
- *  - deletes the expired fields
- *  - deletes the entire key if the hash becomes empty
- *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
- *
- * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
- * Returns the total number of expired fields removed. */
-#define EXPIRE_BULK_LIMIT 1024
-size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
-    size_t total_expired = 0;
-    bool deleteKey = false;
-
-    while (max_entries > 0) {
-        /* Process in batches to avoid large stack allocations. */
-        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
-        void *entries[EXPIRE_BULK_LIMIT];
-        size_t expired = hashTypePopExpiredEntries(o, now, batch_size, entries);
-        if (expired == 0) break;
-
-        robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
-        int argc = buildExpireFieldsArgv(entries, expired, o, argv);
-
-        /* Clean up volatile set if no more volatile fields remain */
-        if (!hashTypeHasVolatileElements(o)) {
-            hashTypeFreeVolatileSet(o);
-            dbUntrackKeyWithVolatileItems(db, o);
-        }
-
-        /* Check if key is now empty after removing expired fields */
-        deleteKey = hashTypeLength(o) == 0;
-
-        enterExecutionUnit(1, 0);
-        if (deleteKey) {
-            robj *keyobj = argv[1];
-            dbDelete(db, keyobj);
-            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
-            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
-            signalModifiedKey(NULL, db, keyobj);
-        } else {
-            propagateFieldsDeletion(db, argv, argc);
-            robj *keyobj = argv[1];
-            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-            if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
-        }
-        exitExecutionUnit();
-        postExecutionUnitOperations();
-
-        freeArgvObjects(argv, argc);
-        freeEntries(entries, expired);
-
-        total_expired += expired;
-        max_entries -= expired;
-        if (deleteKey) break; /* Stop if key was deleted */
-    }
-
-    return total_expired;
 }

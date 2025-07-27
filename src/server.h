@@ -3345,7 +3345,7 @@ void hashTypeTrackEntry(robj *o, void *entry);
 void hashTypeUntrackEntry(robj *o, void *entry);
 void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
-size_t hashTypePopExpiredEntries(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
+size_t hashTypePopExpiredFields(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
 long long hashTypeEstimatedEarliestExpiry(robj *o);
 
 void hashTypeConvert(robj *o, int enc);
@@ -3483,6 +3483,7 @@ int removeExpire(serverDb *db, robj *key);
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy);
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);

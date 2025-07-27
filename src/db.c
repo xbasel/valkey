@@ -1952,6 +1952,91 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = prev_replication_allowed;
 }
 
+/* Propagate HDEL commands for deleted hash fields to AOF and replicas.
+ *
+ * This function builds and propagates a single HDEL command with multiple fields
+ * for the given hash object `o`. It temporarily enables replication (if needed),
+ * constructs the command using the field names, and sends it via alsoPropagate(). */
+static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, entry *fields[]) {
+    int prev_replication_allowed = server.replication_allowed;
+    server.replication_allowed = 1;
+
+    robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    int argc = 0;
+    robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+    argv[argc++] = shared.hdel; // HDEL command
+    argv[argc++] = keyobj; // key name
+    for (size_t i = 0; i < n_fields; i++) {
+        // field to delete
+        argv[argc++] = createStringObjectFromSds(entryGetField(fields[i]));
+    }
+
+    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    server.replication_allowed = prev_replication_allowed;
+
+    for (int i = 0; i < argc; i++) {
+        decrRefCount(argv[i]);
+    }
+}
+
+/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
+ *
+ * This routine:
+ *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
+ *  - deletes the expired fields
+ *  - deletes the entire key if the hash becomes empty
+ *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
+ *
+ * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
+ * Returns the total number of expired fields removed. */
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
+    size_t total_expired = 0;
+    bool deleteKey = false;
+
+    while (max_entries > 0) {
+        /* Process in batches to avoid large stack allocations. */
+        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
+        entry *entries[EXPIRE_BULK_LIMIT];
+        size_t expired = hashTypePopExpiredFields(o, now, batch_size, entries);
+        if (expired == 0) break;
+
+        /* Clean up volatile set if no more volatile fields remain */
+        if (!hashTypeHasVolatileElements(o)) {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+
+        /* Check if key is now empty after removing expired fields */
+        deleteKey = hashTypeLength(o) == 0;
+
+        enterExecutionUnit(1, 0);
+        robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+        if (deleteKey) {
+            dbDelete(db, keyobj);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            signalModifiedKey(NULL, db, keyobj);
+        } else {
+            propagateFieldsDeletion(db, o, expired, entries);
+            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+            if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
+        }
+        exitExecutionUnit();
+        postExecutionUnitOperations();
+        decrRefCount(keyobj);
+        /* Free all entry memory for a given list of expired entries. */
+        for (size_t i = 0; i < expired; i++) {
+            entryFree(entries[i]);
+        }
+
+        total_expired += expired;
+        max_entries -= expired;
+        if (deleteKey) break; /* Stop if key was deleted */
+    }
+
+    return total_expired;
+}
+
 /* Use this instead of keyIsExpired if you already have the value object. */
 static int objectIsExpired(robj *val) {
     /* Don't expire anything while loading. It will be done later. */
