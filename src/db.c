@@ -1965,7 +1965,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, entr
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
-    argv[argc++] = keyobj; // key name
+    argv[argc++] = keyobj;      // key name
     for (size_t i = 0; i < n_fields; i++) {
         // field to delete
         argv[argc++] = createStringObjectFromSds(entryGetField(fields[i]));

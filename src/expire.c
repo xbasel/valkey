@@ -197,7 +197,6 @@ static int activeExpireEffort(void) {
 }
 
 long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
-
     if (timelimit_us <= 0) return 0;
 
     /* Adjust the running parameters according to the configured expire
@@ -207,7 +206,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
         ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
     unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - activeExpireEffort();
     unsigned long keys_per_loop =
-            ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * activeExpireEffort();
+        ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * activeExpireEffort();
 
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
@@ -278,20 +277,21 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
          * distribute the time evenly across DBs. */
         state->current_db++;
 
-        hashtableScanFunction scan_cb = NULL;;
+        hashtableScanFunction scan_cb = NULL;
+        ;
         kvstore *kvs = NULL;
         if (db) {
             switch (jobType) {
-                case KEYS:
-                    kvs = db->expires;
-                    scan_cb = expireScanCallback;
-                    break;
-                case FIELDS:
-                    kvs = db->keys_with_volatile_items;
-                    scan_cb = fieldExpireScanCallback;
-                    break;
-                default:
-                    serverPanic("Unknown active expiry job type %d.", jobType);
+            case KEYS:
+                kvs = db->expires;
+                scan_cb = expireScanCallback;
+                break;
+            case FIELDS:
+                kvs = db->keys_with_volatile_items;
+                scan_cb = fieldExpireScanCallback;
+                break;
+            default:
+                serverPanic("Unknown active expiry job type %d.", jobType);
             }
         }
 
