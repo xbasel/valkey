@@ -190,8 +190,7 @@ static int isExpiryTableValidForSamplingCb(hashtable *ht) {
 /* Returns the zero-based active expire effort level.
  *
  * Internally we use a 0-based effort level (0–9), while the server config
- * exposes it as 1–10. This helper normalizes it for internal use.
- */
+ * exposes it as 1–10. This helper normalizes it for internal use. */
 static int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
 }
@@ -426,8 +425,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
     return now - start;
 }
 
-/*
- * activeExpireCycle
+/* activeExpireCycle
  *
  * This function performs active expiration of both normal keys (with TTL)
  * and hash fields (with field-level TTL via volatile sets). Its purpose is to
@@ -452,11 +450,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
  * starvation of either mechanism. Since the memory reclaim pace and iteration
  * model of keys versus hash fields are different and unpredictable,
  * alternating naturally balances the overall expiry effort when both are
- * fully consuming their available time budget.
- *
- * Note that field expiry is only performed during the slow iteration cycles,
- * TODO: Consider scheduling field expiry to run in the fast cycle.
- */
+ * fully consuming their available time budget. */
 void activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we

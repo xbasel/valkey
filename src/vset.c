@@ -1161,7 +1161,7 @@ static inline size_t vsetBucketPopExpired_VECTOR(vsetBucket **bucket, vsetGetExp
         if (getExpiry(entry) > now || !(expiryFunc(entry, ctx)))
             break;
     }
-    // If no expiry occurred, no need to split.
+    /* If no expiry occurred, no need to split. */
     if (i > 0) {
         pVector *new_pv = pvSplit(&pv, i);
         *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());

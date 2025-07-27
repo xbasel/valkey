@@ -2093,8 +2093,7 @@ static void ctxAddEntry(expiryContext *ctx, void *e) {
 
 /* Callback for popping expired entries from the volatile set.
  * Deletes the entry from the hash table and tracks it in the expiry context.
- * Returns 1 if deleted, 0 if nothing to do.
- */
+ * Returns 1 if deleted, 0 if nothing to do. */
 static int expireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;

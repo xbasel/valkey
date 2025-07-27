@@ -484,8 +484,7 @@ static void defragZsetSkiplist(robj *ob) {
  *
  * Large hashtable-encoded hashes are deferred via `defrag_later`.
  * Smaller ones are defragmented immediately, possibly over multiple passes.
- * Listpack-encoded hashes are always handled in a single pass.
- */
+ * Listpack-encoded hashes are always handled in a single pass. */
 static void defragHash(robj *ob) {
     hashtable *ht = ob->ptr;
     if (ob->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(ht) > server.active_defrag_max_scan_fields) {

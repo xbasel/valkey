@@ -525,7 +525,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
-/* Add a key with volatile items to the tracking kvstore.  */
+/* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
@@ -533,7 +533,7 @@ void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     }
 }
 
-/* Delete a key from the keys with volatile entries tracking kvstore  */
+/* Delete a key from the keys with volatile entries tracking kvstore */
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
@@ -1675,8 +1675,7 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
  *
  * This copies the `expiry` array, which contains per-expiry-type
  * metadata such as the average TTL (for stats) and the active
- * expiry scan cursor.
- */
+ * expiry scan cursor. */
 static void copyDbExpiry(serverDb *target, const serverDb *source) {
     memcpy(target->expiry, source->expiry, sizeof(target->expiry));
 }
@@ -1843,7 +1842,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
 
     robj *newval = objectSetExpire(val, when);
     if (newval->type == OBJ_HASH && hashTypeHasVolatileElements(newval)) {
-        // Replace the pointer in the keys_with_volatile_items table without accessing the old pointer
+        /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
         int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);

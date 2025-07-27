@@ -43,8 +43,7 @@ typedef enum {
  * KEYS:   Expiry of top-level keys via db->expires.
  * FIELDS: Expiry of hash fields stored in volatile sets (e.g., per-field TTLs).
  *
- * ACTIVE_EXPIRY_TYPE_COUNT: Number of expiry types, used for sizing arrays and iteration.
- */
+ * ACTIVE_EXPIRY_TYPE_COUNT: Number of expiry types, used for sizing arrays and iteration. */
 enum activeExpiryType {
     KEYS,
     FIELDS,
