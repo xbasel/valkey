@@ -1956,7 +1956,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 static int objectIsExpired(robj *val) {
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
-    if (!checkExpiry(objectGetExpire(val))) return 0;
+    if (!timestampIsExpired(objectGetExpire(val))) return 0;
     if (server.primary_host == NULL && server.import_mode) {
         if (server.current_client && server.current_client->flag.import_source) return 0;
     }
@@ -1967,7 +1967,7 @@ static int keyIsExpiredWithDictIndexImpl(serverDb *db, robj *key, int dict_index
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
     mstime_t when = getExpireWithDictIndex(db, key, dict_index);
-    return checkExpiry(when) ? 1 : 0;
+    return timestampIsExpired(when) ? 1 : 0;
 }
 
 /* Check if the key is expired. */

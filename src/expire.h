@@ -58,4 +58,12 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
 size_t hashTypeReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 
+/* Handling of expired keys and hash fields */
+void activeExpireCycle(int type);
+void expireReplicaKeys(void);
+void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
+void flushReplicaKeysWithExpireList(void);
+size_t getReplicaKeyWithExpireCount(void);
+bool timestampIsExpired(mstime_t when);
+
 #endif
