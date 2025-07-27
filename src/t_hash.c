@@ -94,7 +94,8 @@ void hashTypeTrackEntry(robj *o, void *entry) {
     } else {
         set = hashTypeGetOrcreateVolatileSet(o);
     }
-    serverAssert(vsetAddEntry(set, entryGetExpiry, entry));
+    bool added = vsetAddEntry(set, entryGetExpiry, entry);
+    serverAssert(added);
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
@@ -378,7 +379,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             long long entry_expiry = entryGetExpiry(existing);
             /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
              * and treat it like it did not exist. */
-            bool is_expired = timestampIsExpired(entry_expiry);
+            bool is_expired = checkExpiry(entry_expiry);
             if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
                 /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
                 expiry = entry_expiry;

@@ -2664,7 +2664,7 @@ int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
-bool timestampIsExpired(mstime_t when);
+bool checkExpiry(mstime_t when);
 
 /* ERROR STATS constants */
 

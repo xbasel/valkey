@@ -53,7 +53,6 @@ typedef struct client client;
 typedef struct serverObject robj;
 typedef struct serverDb serverDb;
 
-bool timestampIsExpired(mstime_t when);
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);

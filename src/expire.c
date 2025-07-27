@@ -163,10 +163,11 @@ void expireScanCallback(void *privdata, void *entry) {
  * Sets `has_more_expired_entries` if more remain. Updates stats. */
 void fieldExpireScanCallback(void *privdata, void *volaKey) {
     expireScanData *data = privdata;
-    serverAssert(volaKey);
-    serverAssert(hashTypeHasVolatileElements(volaKey));
-    mstime_t now = mstime();
-    size_t expired_fields = hashTypeReclaimExpiredFields(volaKey, data->db, now, data->max_entries);
+    robj *o = volaKey;
+    serverAssert(o);
+    serverAssert(hashTypeHasVolatileElements(o));
+    mstime_t now = server.mstime;
+    size_t expired_fields = hashTypeReclaimExpiredFields(o, data->db, now, data->max_entries);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
@@ -205,7 +206,6 @@ static kvstore *expiryKvstore(serverDb *db, int jobType) {
         return db->keys_with_volatile_items;
     default:
         serverPanic("Unknown active expiry job type %d.", jobType);
-        return NULL; // unreachable
     }
 }
 
@@ -946,8 +946,9 @@ void touchCommand(client *c) {
     addReplyLongLong(c, touched);
 }
 
-/* Returns 1 if the expire value is expired, 0 otherwise. */
-bool timestampIsExpired(mstime_t when) {
+/* Returns true if the provided timestamp represents an expired time, false otherwise.
+ * A negative value means no expiration. */
+bool checkExpiry(mstime_t when) {
     if (when < 0) return false; /* no expire */
     mstime_t now = commandTimeSnapshot();
 
