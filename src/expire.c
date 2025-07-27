@@ -168,11 +168,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     mstime_t now = mstime();
     size_t expired_fields = hashTypeReclaimExpiredFields(volaKey, data->db, now, data->max_entries);
     if (expired_fields) {
-        if (expired_fields == data->max_entries) {
-            data->has_more_expired_entries = true;
-        } else {
-            data->has_more_expired_entries = false;
-        }
+        data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
     }
     data->sampled++;
