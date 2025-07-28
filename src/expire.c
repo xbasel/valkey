@@ -368,7 +368,10 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
                 !repeat) { /* Update the average TTL stats every 16 iterations or about to exit. */
                 /* Update the average TTL stats for this database,
                  * because this may reach the time limit. */
-                if (data.ttl_samples) {
+                if (data.ttl_samples && jobType == KEYS) {
+                    /* Average TTL is calculated only for keys, as there's currently
+                     * no reliable way to compute it for fields. */
+
                     long long avg_ttl = data.ttl_sum / data.ttl_samples;
 
                     /* Do a simple running average with a few samples.

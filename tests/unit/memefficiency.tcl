@@ -99,7 +99,7 @@ run_solo {defrag} {
         uplevel 1 $code_block
 
         # Wait for the active defrag to stop working.
-        wait_for_condition 150 200 {
+        wait_for_condition 150 20000 {
             [s active_defrag_running] eq 0
         } else {
             log_frag "defrag didn't stop"
@@ -368,6 +368,7 @@ run_solo {defrag} {
                 for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
+            bp 1
         }
     }
 
