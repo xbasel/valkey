@@ -1687,9 +1687,9 @@ void clientAcceptHandler(connection *conn) {
     sds username = connGetPeerUsername(conn);
     if (username != NULL) {
         user *u = ACLGetUserByName(username, sdslen(username));
-        if (u) {
-            c->user = u;
-            c->flag.authenticated = true;
+        if (u && (u->flags & USER_FLAG_ENABLED)) {
+            clientSetUser(c, u, 1);
+            moduleNotifyUserChanged(c);
             serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
                       server.hide_user_data_from_log ? "*redacted*" : u->name);
         } else {
@@ -5397,7 +5397,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
      * rax */
     if (c->pubsub_data && c->pubsub_data->client_tracking_prefixes)
-        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) * sizeof(raxNode *));
+        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
 }
