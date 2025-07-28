@@ -966,7 +966,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                 return -1;
             }
             nwritten += n;
-            /* check if need to add expired time for the hash elements */
+            /* check if need to add expired time for the hash fields */
             bool add_expiry = hashTypeHasVolatileFields(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);

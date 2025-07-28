@@ -432,7 +432,6 @@ int test_vset_defrag(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
     allocatorDefragInit();
-
     srand(time(NULL));
 
     vset set;
@@ -470,7 +469,6 @@ int test_vset_defrag(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 /* --------- Fuzzer Test --------- */
 int test_vset_fuzzer(int argc, char **argv, int flags) {
     UNUSED(argc);
@@ -495,9 +493,7 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
             remove_mock_entry(&set);
             break;
         case 4:
-
             TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
-
             break;
         }
 
