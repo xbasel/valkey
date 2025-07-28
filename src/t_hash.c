@@ -2169,9 +2169,9 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
     vset_cursor = (struct volatileSetCursor *)cursor;
 
     if (!vset_cursor) {
-        // New object scan
-        /* defrag the hashtable struct and tables */
+        /* New object scan */
         hashtable *ht = ob->ptr;
+        /* defrag the hashtable struct and tables */
         hashtable *new_hashtable = hashtableDefragTables(ht, defragAllocfn);
         if (new_hashtable) ob->ptr = new_hashtable;
         vset_cursor = &volaSetIter;
@@ -2184,12 +2184,14 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
         vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, activeDefragHashTypeEntry, ob,
                                                   defragAllocfn,
                                                   HASHTABLE_SCAN_EMIT_REF);
-        if (vset_cursor->cursor == 0 && hashTypeHasVolatileElements(ob)) {
-            /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */
-            vset_cursor->is_vsetDefrag = true;
-        } else {
-            /* We're done with this object. */
-            return 0;
+        if (vset_cursor->cursor == 0) {
+            if (hashTypeHasVolatileElements(ob)) {
+                /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */
+                vset_cursor->is_vsetDefrag = true;
+            } else {
+                /* We're done with this object. */
+                return 0;
+            }
         }
     } else {
         /* We're already defraging volatile set. */
