@@ -2,6 +2,7 @@
 #include "../entry.h"
 #include "test_help.h"
 #include "../zmalloc.h"
+#include "../allocator_defrag.h"
 
 #include <stdio.h>
 #include <limits.h>
@@ -430,7 +431,8 @@ int test_vset_defrag(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
-#if defined(HAVE_DEFRAG)
+    allocatorDefragInit();
+
     srand(time(NULL));
 
     vset set;
@@ -464,7 +466,7 @@ int test_vset_defrag(int argc, char **argv, int flags) {
 
     vsetClear(&set);
     free_mock_entries();
-#endif
+
     return 0;
 }
 
@@ -493,9 +495,9 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
             remove_mock_entry(&set);
             break;
         case 4:
-#if defined(HAVE_DEFRAG)
+
             TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
-#endif
+
             break;
         }
 
