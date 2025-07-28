@@ -210,9 +210,9 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     typedef struct {
-        unsigned int current_db;   /* Next DB to test. */
-        bool timelimit_exit;       /* Time limit hit in previous call? */
-        long long last_fast_cycle; /* When last fast cycle ran. */
+        unsigned int current_db;  /* Next DB to test. */
+        bool timelimit_exit;      /* Time limit hit in previous call? */
+        monotime last_fast_cycle; /* When last fast cycle ran. */
     } expireState;
     static expireState _expire_state[2] = {0}; // [KEYS, FIELDS]
     expireState *state = &_expire_state[jobType];
@@ -220,7 +220,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
-    long long start = ustime();
+    monotime start = getMonotonicUs();
 
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
@@ -399,8 +399,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
                     data.ttl_samples = 0;
                 }
                 if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
-                    long long elapsed = ustime() - start;
-                    if (elapsed > timelimit_us) {
+                    if (elapsedUs(start) > (uint64_t)timelimit_us) {
                         state->timelimit_exit = 1;
                         server.stat_expired_time_cap_reached_count++;
                         break;
@@ -410,8 +409,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
         } while (repeat);
     }
 
-    long long now = ustime();
-    long long elapsed = now - start;
+    long long elapsed = (long long)elapsedUs(start);
     server.stat_expire_cycle_time_used += elapsed;
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
     latencyTraceIfNeeded(db, expire_cycle, elapsed);
@@ -425,7 +423,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
         current_perc = 0;
     server.stat_expired_stale_perc = (current_perc * 0.05) + (server.stat_expired_stale_perc * 0.95);
 
-    return now - start;
+    return elapsed;
 }
 
 /* activeExpireCycle
