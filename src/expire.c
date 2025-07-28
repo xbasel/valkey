@@ -165,7 +165,7 @@ void fieldExpireScanCallback(void *privdata, void *volaKey) {
     expireScanData *data = privdata;
     robj *o = volaKey;
     serverAssert(o);
-    serverAssert(hashTypeHasVolatileElements(o));
+    serverAssert(hashTypeHasVolatileFields(o));
     mstime_t now = server.mstime;
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries);
     if (expired_fields) {

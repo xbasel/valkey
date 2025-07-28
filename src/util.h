@@ -32,7 +32,6 @@
 
 #include <stdint.h>
 #include "sds.h"
-#include "monotonic.h"
 
 /* Anti-warning macro... */
 #ifndef UNUSED

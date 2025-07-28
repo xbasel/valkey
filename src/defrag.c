@@ -694,7 +694,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
             serverAssert(replaced);
         }
-        if (newob->type == OBJ_HASH && hashTypeHasVolatileElements(newob)) {
+        if (newob->type == OBJ_HASH && hashTypeHasVolatileFields(newob)) {
             /* Check if this is a hash object containing volatile fields.
              * and update keys_with_volatile_items after defrag. */
             hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);

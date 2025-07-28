@@ -189,7 +189,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH) {
-        if (hashTypeHasVolatileElements(o)) {
+        if (hashTypeHasVolatileFields(o)) {
             dbTrackKeyWithVolatileItems(db, o);
         } else {
             dbUntrackKeyWithVolatileItems(db, o);
@@ -503,7 +503,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        if (val->type == OBJ_HASH && hashTypeHasVolatileElements(val)) {
+        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
             dbUntrackKeyWithVolatileItems(db, val);
         }
 
@@ -527,7 +527,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileElements(o)) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
@@ -1841,7 +1841,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
-    if (newval->type == OBJ_HASH && hashTypeHasVolatileElements(newval)) {
+    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
@@ -2000,7 +2000,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         if (expired == 0) break;
 
         /* Clean up volatile set if no more volatile fields remain */
-        if (!hashTypeHasVolatileElements(o)) {
+        if (!hashTypeHasVolatileFields(o)) {
             dbUntrackKeyWithVolatileItems(db, o);
         }
 
@@ -2018,7 +2018,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         } else {
             propagateFieldsDeletion(db, o, expired, entries);
             notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
-            if (!hashTypeHasVolatileElements(o)) dbUntrackKeyWithVolatileItems(db, o);
+            if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
         }
         exitExecutionUnit();
         postExecutionUnitOperations();
