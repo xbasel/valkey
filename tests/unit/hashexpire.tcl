@@ -32,7 +32,7 @@ proc get_keys {r} {
 proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired expected_increment} {
     expr {
         [$r HLEN $myhash] == $expected_len &&
-        [info_field [$r info stats] expired_subkeys] == ($initial_expired + $expected_increment)
+        [info_field [$r info stats] expired_fields] == ($initial_expired + $expected_increment)
     }
 }
 
@@ -100,8 +100,8 @@ proc setup_replication_test {primary replica primary_host primary_port} {
     } else {
         fail "Can't turn the instance into a replica"
     }
-    set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
-    set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+    set primary_initial_expired [info_field [$primary info stats] expired_fields]
+    set replica_initial_expired [info_field [$replica info stats] expired_fields]
     return [list $primary_initial_expired $replica_initial_expired]
 }
 
@@ -1658,13 +1658,13 @@ start_server {tags {"hashexpire"}} {
         # does NOT trigger Valkey's expiration mechanism.
         #
         # The key observation is that Valkey tracks how many fields were
-        # expired via TTL using the `expired_subkeys` counter in INFO stats.
+        # expired via TTL using the `expired_fields` counter in INFO stats.
         # If HDEL caused expiration to be processed internally,
         # this counter would increment. We assert that it remains unchanged.
 
-        # Capture expired_subkeys before
+        # Capture expired_fields before
         set before_info [r INFO stats]
-        set before [info_field $before_info expired_subkeys]
+        set before [info_field $before_info expired_fields]
 
         # Create field with short TTL
         r HSETEX myhash PX 10 FIELDS 1 field1 val1
@@ -1679,9 +1679,9 @@ start_server {tags {"hashexpire"}} {
         # Field should be gone
         assert_equal 0 [r HEXISTS myhash field1]
 
-        # Capture expired_subkeys again
+        # Capture expired_fields again
         set after_info [r INFO stats]
-        set after [info_field $after_info expired_subkeys]
+        set after [info_field $after_info expired_fields]
 
         # Verify that no expiry occurred internally
         assert_equal $before $after
@@ -2734,15 +2734,15 @@ tags {"aof external:skip"} {
             r DEBUG SET-ACTIVE-EXPIRE no
             
             set hlen [r HLEN myhash]
-            set expired_subkeys [info_field [r info stats] expired_subkeys]
+            set expired_fields [info_field [r info stats] expired_fields]
             assert_equal 1 [get_keys_with_volatile_items r]
 
             # Verify that HLEN is between 20 and 30 (inclusive), and 
-            # when combined with expired_subkeys, the total should be 30
+            # when combined with expired_fields, the total should be 30
             if {$hlen < 20 || $hlen > 30} {
                 fail "Expected HLEN to be between 20 and 30, but got $hlen"
             }
-            assert_equal 30 [expr ($expired_subkeys + $hlen)]
+            assert_equal 30 [expr ($expired_fields + $hlen)]
 
             # Verify the TTLs are preserved
             for {set i 1} {$i <= 10} {incr i} {
@@ -2773,7 +2773,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command active expiry with single field" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2
             assert_equal 2 [r HLEN myhash]
@@ -2788,7 +2788,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "HGETEX $command active expiry with multiple fields" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             r HSET myhash f1 v1 f2 v2 f3 v3
             assert_equal 3 [r HLEN myhash]
@@ -2806,7 +2806,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "HGETEX $command active expiry removes entire key when last field expires" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             r HSET myhash f1 v1
             assert_equal 0 [get_keys_with_volatile_items r]
             assert_equal "v1" [r HGETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1]
@@ -2852,7 +2852,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test "HGETEX overwrite existing expiry with active expiry" {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
 
         r HSET myhash f1 v1
         assert_equal 1 [r HLEN myhash]
@@ -2879,7 +2879,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command keyspace notifications for active expiry" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2
             assert_equal 2 [r HLEN myhash]
@@ -2900,7 +2900,7 @@ start_server {tags {"hashexpire external:skip"}} {
     
     test "HGETEX keyspace notification when key deleted with active expiry" {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
 
         r HSET myhash f1 v1
         assert_equal 1 [r HLEN myhash]
@@ -2927,7 +2927,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command single field expires leaving other fields intact" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             r HSET myhash f2 v2
             assert_equal 1 [r HLEN myhash]
             assert_equal 0 [get_keys_with_volatile_items r]
@@ -2940,7 +2940,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "HSETEX $command multiple fields expire leaving non-expired fields intact" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             r HSET myhash f2 v2
             assert_equal 1 [r HLEN myhash]
             assert_equal 0 [get_keys_with_volatile_items r]
@@ -2954,7 +2954,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "HSETEX $command hash key deleted when all fields expire" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
             wait_for_active_expiry r myhash 0 $initial_expired 1
             assert_equal 0 [r EXISTS myhash]
@@ -2985,7 +2985,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test "HSETEX overwrites existing field expiry with new shorter expiry" {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1
         assert_equal 1 [r HLEN myhash]
         assert_equal 0 [get_keys_with_volatile_items r]
@@ -3008,7 +3008,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command - keyspace notifications fired on field expiry" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             r HSET myhash f2 v2
             assert_equal 1 [r HLEN myhash]
             assert_equal 0 [get_keys_with_volatile_items r]
@@ -3023,7 +3023,7 @@ start_server {tags {"hashexpire external:skip"}} {
     
     test "HSETEX - keyspace notifications include del event when hash key removed" {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         set rd [setup_single_keyspace_notification r]
         r HSETEX myhash PX 100 FIELDS 1 f1 v1
         wait_for_active_expiry r myhash 0 $initial_expired 1
@@ -3041,7 +3041,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {Active expiry deletes entire key when only field expires} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1
         assert_equal 1 [r HLEN myhash]
         assert_equal 1 [get_keys r]
@@ -3059,7 +3059,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {Active expiry removes only expired field while preserving others} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1 f2 v2 f3 v3
         assert_equal 3 [r HLEN myhash]
         assert_equal 1 [get_keys r]
@@ -3081,7 +3081,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {Active expiry reclaims memory correctly with large hash containing many fields} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         set value [string repeat x 1024]
         set num_fields 10000
         # Set multiple fields
@@ -3132,7 +3132,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {Active expiry handles fields with different TTL values correctly} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
 
         r HSET myhash f1 v1 f2 v2 f3 v3
         assert_equal 3 [r HLEN myhash]
@@ -3151,7 +3151,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {Active expiry removes only specified fields leaving others intact} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
 
         r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
         assert_equal 5 [r HLEN myhash]
@@ -3202,7 +3202,7 @@ start_server {tags {"hashexpire external:skip"}} {
     foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
         test "$command active expiry on single field" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2
             assert_equal 2 [r HLEN myhash]
@@ -3219,7 +3219,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "$command active expiry with multiple fields" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
             assert_equal 4 [r HLEN myhash]
@@ -3236,7 +3236,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "$command active expiry removes entire key when last field expires" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1
             assert_equal 1 [r HLEN myhash]
@@ -3253,7 +3253,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "$command active expiry with non-existing fields" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2
             assert_equal 2 [r HLEN myhash]
@@ -3269,7 +3269,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "$command active expiry with mixed existing and non-existing fields" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             r HSET myhash f1 v1 f2 v2 f3 v3
             assert_equal 3 [r HLEN myhash]
@@ -3287,7 +3287,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test "$command active expiry with already expired fields" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 v1 f2 v2 f3 v3
             assert_equal 3 [r HLEN myhash]
@@ -3324,7 +3324,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
     set key "{mymigrate}myhash"
 
     test {Hash field TTL values and active expiry state preserved during cluster slot migration} {
-        set initial_expired [info_field [R 0 info stats] expired_subkeys]
+        set initial_expired [info_field [R 0 info stats] expired_fields]
         
         R 0 HSET $key f1 v1 f2 v2 f3 v3
         assert_equal 3 [R 0 HLEN $key]
@@ -3337,7 +3337,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         # Wait for short expire field (f2) to be expired by active expire
         wait_for_condition 100 100 {
             [R 0 HLEN $key] eq 2 &&
-            [info_field [R 0 info stats] expired_subkeys] eq [expr {$initial_expired + 1}]
+            [info_field [R 0 info stats] expired_fields] eq [expr {$initial_expired + 1}]
         } else {
             fail "Fields should have expired"
         }
@@ -3357,7 +3357,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         R 0 CLUSTER SETSLOT $slot NODE $R1_id
         R 1 CLUSTER SETSLOT $slot NODE $R1_id
 
-        set initial_expired [info_field [R 1 info stats] expired_subkeys]
+        set initial_expired [info_field [R 1 info stats] expired_fields]
         
         # Verify after slot migration all fields are present and ttl is kept
         assert_match {1} [scan [regexp -inline {keys=([\d]*)} [R 1 info keyspace]] keys=%d]
@@ -3374,7 +3374,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         # Verify active expiry
         wait_for_condition 200 50 {
             [R 1 HLEN $key] eq 0 &&
-            [info_field [R 1 info stats] expired_subkeys] eq [expr {$initial_expired + 2}]
+            [info_field [R 1 info stats] expired_fields] eq [expr {$initial_expired + 2}]
         } else {
             fail "All fields should have expired"
         }
@@ -3397,7 +3397,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
     set key "{mymigrate}myhash"
 
     test {Large hash with mixed TTL fields maintains expiry state after cluster slot migration} {
-        set initial_expired [info_field [R 0 info stats] expired_subkeys]
+        set initial_expired [info_field [R 0 info stats] expired_fields]
         set num_fields 100
 
         # Create hash fields
@@ -3421,7 +3421,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         # wait for short expire field to be expired by active expire
         wait_for_condition 100 100 {
             [R 0 HLEN $key] eq 75 &&
-            [info_field [R 0 info stats] expired_subkeys] eq [expr {$initial_expired + 25}]
+            [info_field [R 0 info stats] expired_fields] eq [expr {$initial_expired + 25}]
         } else {
             fail "Fields should have expired"
         }
@@ -3449,7 +3449,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         R 0 CLUSTER SETSLOT $slot NODE $R1_id
         R 1 CLUSTER SETSLOT $slot NODE $R1_id
         
-        set initial_expired [info_field [R 1 info stats] expired_subkeys]
+        set initial_expired [info_field [R 1 info stats] expired_fields]
         # Verify after slot migration all fields are present and ttl is kept
         assert_equal 75 [R 1 HLEN $key]
         for {set i 1} {$i <= $num_fields} {incr i} {
@@ -3477,7 +3477,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         # Verify active expiry
         wait_for_condition 100 100 {
             [R 1 HLEN $key] eq 0 &&
-            [info_field [R 1 info stats] expired_subkeys] eq [expr {$initial_expired + 75}]
+            [info_field [R 1 info stats] expired_fields] eq [expr {$initial_expired + 75}]
         } else {
             fail "All fields should have expired"
         }
@@ -3521,8 +3521,8 @@ start_server {tags {"hashexpire external:skip"}} {
             
             # Wait for active expiry
             wait_for_active_expiry $primary myhash 1 $primary_initial_expired 1
-            # Ensure the replica does not increment expired_subkeys
-            assert_equal $replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            # Ensure the replica does not increment expired_fields
+            assert_equal $replica_initial_expired [info_field [$replica info stats] expired_fields]
             
             # Verify expired field returns empty string and non-expired returns value
             foreach instance [list $primary $replica] {
@@ -3586,9 +3586,9 @@ start_server {tags {"hashexpire external:skip"}} {
                 wait_for_ofs_sync $primary $replica
                 wait_for_ofs_sync $replica $replica_2
 
-                set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
-                set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
-                set replica_2_initial_expired [info_field [$replica_2 info stats] expired_subkeys]
+                set primary_initial_expired [info_field [$primary info stats] expired_fields]
+                set replica_initial_expired [info_field [$replica info stats] expired_fields]
+                set replica_2_initial_expired [info_field [$replica_2 info stats] expired_fields]
                 
                 $primary HPEXPIRE myhash 100 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 2 hdel (for replicas)
                 wait_for_ofs_sync $primary $replica
@@ -3597,9 +3597,9 @@ start_server {tags {"hashexpire external:skip"}} {
                 # Wait for active expire
                 wait_for_active_expiry $primary myhash 1 $primary_initial_expired 1
                 
-                # Ensure the replica does not increment expired_subkeys
-                assert_equal $replica_initial_expired [info_field [$replica info stats] expired_subkeys]
-                assert_equal $replica_2_initial_expired [info_field [$replica_2 info stats] expired_subkeys]
+                # Ensure the replica does not increment expired_fields
+                assert_equal $replica_initial_expired [info_field [$replica info stats] expired_fields]
+                assert_equal $replica_2_initial_expired [info_field [$replica_2 info stats] expired_fields]
             
 
                 # Verify expired field returns empty string and non-expired returns value
@@ -3676,7 +3676,7 @@ start_server {tags {"hashexpire external:skip"}} {
             verify_values $replica $f1_exp $f2_exp
             
             # Set f1 to expire in 1 second and wait for active expiration
-            set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            set replica_initial_expired [info_field [$replica info stats] expired_fields]
             $replica HEXPIRE myhash 1 FIELDS 1 f1
             wait_for_active_expiry $replica myhash 2 $replica_initial_expired 1
 
@@ -3684,8 +3684,8 @@ start_server {tags {"hashexpire external:skip"}} {
             # Not affected primary
             assert_equal 3 [$primary HLEN myhash]
             assert_equal "v1 v2 v3" [$primary HMGET myhash f1 f2 f3]
-            set primary_initial_expired [info_field [$primary info stats] expired_subkeys]
-            assert_equal 0 [expr {[info_field [$primary info stats] expired_subkeys] - $primary_initial_expired}]
+            set primary_initial_expired [info_field [$primary info stats] expired_fields]
+            assert_equal 0 [expr {[info_field [$primary info stats] expired_fields] - $primary_initial_expired}]
 
             foreach rd [list $rd_primary $rd_replica] {
                 assert_keyevent_patterns $rd myhash hset hexpire hexpire
@@ -3745,7 +3745,7 @@ start_server {tags {"hashexpire external:skip"}} {
             # Set f1 to expire in 1 second and wait for active expiration
             $replica HEXPIRE myhash 1 FIELDS 1 f1 ;# will trigger hexpire
             wait_for_ofs_sync $replica $primary
-            set replica_initial_expired [info_field [$replica info stats] expired_subkeys]
+            set replica_initial_expired [info_field [$replica info stats] expired_fields]
             wait_for_active_expiry $replica myhash 2 $replica_initial_expired 1
 
             # Verify prev primary, which is now replica of new primary (prev primary) is sync
@@ -3756,8 +3756,8 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal "v2" [$primary HGET myhash f2]
             assert_equal "v3" [$primary HGET myhash f3]
 
-            # Primary is now replica, so no expected change in expired_subkeys
-            assert_equal [info_field [$primary info stats] expired_subkeys] $primary_initial_expired
+            # Primary is now replica, so no expected change in expired_fields
+            assert_equal [info_field [$primary info stats] expired_fields] $primary_initial_expired
 
             foreach rd [list $rd_primary $rd_replica] {
                 assert_keyevent_patterns $rd myhash hset hexpire hexpire hexpire
@@ -3833,12 +3833,12 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 }
 
-## expired_subkeys Tests ####
+## expired_fields Tests ####
 start_server {tags {"hashexpire external:skip"}} {
     r config set notify-keyspace-events KEA
-    test {expired_subkeys metric increments by one when single hash field expires} {
+    test {expired_fields metric increments by one when single hash field expires} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         
         # Create hash with fields and ttl
         r HSET myhash f1 v1 f2 v2 f3 v3
@@ -3850,16 +3850,16 @@ start_server {tags {"hashexpire external:skip"}} {
         # Wait for expiration
         wait_for_active_expiry r myhash 2 $initial_expired 1
         
-        # Check expired_subkeys incremented
-        assert_equal 1 [info_field [r info stats] expired_subkeys]
+        # Check expired_fields incremented
+        assert_equal 1 [info_field [r info stats] expired_fields]
         
         # Verify expired field returns empty string and non-expired return values
         assert_equal "{} v2 v3" [r HMGET myhash f1 f2 f3]
     }
 
-    test {expired_subkeys metric tracks multiple field expirations with keyspace notifications} {
+    test {expired_fields metric tracks multiple field expirations with keyspace notifications} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         
         set rd [setup_single_keyspace_notification r]
         
@@ -3874,8 +3874,8 @@ start_server {tags {"hashexpire external:skip"}} {
         # Wait for expiration
         wait_for_active_expiry r myhash 4 $initial_expired 1
         
-        # Verify expired_subkeys incremented
-        assert_equal 1 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        # Verify expired_fields incremented
+        assert_equal 1 [expr {[info_field [r info stats] expired_fields] - $initial_expired}]
         
         # Verify expired field returns empty string and non-expired return values
         assert_equal "{} v2 v3 v4 v5" [r HMGET myhash f1 f2 f3 f4 f5]
@@ -3885,12 +3885,12 @@ start_server {tags {"hashexpire external:skip"}} {
         
         # Verify f2 no longer has TTL
         assert_equal -1 [r HTTL myhash FIELDS 1 f2]
-        assert_equal 1 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        assert_equal 1 [expr {[info_field [r info stats] expired_fields] - $initial_expired}]
 
         # Expire 2 fields at once
         r HPEXPIRE myhash 1 FIELDS 2 f4 f5
         wait_for_active_expiry r myhash 2 $initial_expired 3
-        assert_equal 3 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        assert_equal 3 [expr {[info_field [r info stats] expired_fields] - $initial_expired}]
         
         # Verify expired fields return empty string and non-expired return values
         assert_equal "{} v2 v3 {} {}" [r HMGET myhash f1 f2 f3 f4 f5]
@@ -3911,7 +3911,7 @@ start_server {tags {"hashexpire external:skip"}} {
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
 
-        test {expired_subkeys metric increments only on primary not replica during field expiry} {
+        test {expired_fields metric increments only on primary not replica during field expiry} {
             lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
             
             # Create hash fields with different TTLs
@@ -3932,7 +3932,7 @@ start_server {tags {"hashexpire external:skip"}} {
             # Wait for active expiry
             wait_for_active_expiry $primary myhash 3 $primary_initial_expired 1
 
-            assert_equal 0 [info_field [$replica info stats] expired_subkeys]
+            assert_equal 0 [info_field [$replica info stats] expired_fields]
         }
     }
 }
@@ -3946,7 +3946,7 @@ start_server {tags {"hashexpire external:skip"}} {
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
 
-        test {expired_subkeys metric correctly tracks sequential field expirations in replication} {
+        test {expired_fields metric correctly tracks sequential field expirations in replication} {
             lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
             # Initialize deferred clients and subscribe to keyspace notifications
             foreach instance [list $primary $replica] {
@@ -3998,8 +3998,8 @@ start_server {tags {"hashexpire external:skip"}} {
                 # Wait for active expiry
                 wait_for_active_expiry $primary myhash [expr {4 - $i}] $primary_initial_expired $i
 
-                # Replica should NOT increment expired_subkeys
-                assert_equal 0 [info_field [$replica info stats] expired_subkeys]
+                # Replica should NOT increment expired_fields
+                assert_equal 0 [info_field [$replica info stats] expired_fields]
                 
                 # Replica should also have the field removed with replication
                 assert_equal [expr {4 - $i}] [$replica HLEN myhash]
@@ -4045,7 +4045,7 @@ start_server {tags {"hashexpire external:skip"}} {
 start_server {tags {"hashexpire external:skip"}} {
     test "CLIENT PAUSE WRITE blocks hash field active expiry until pause ends" {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
 
         r HSET myhash f1 v1 f2 v2
         assert_equal 2 [r HLEN myhash]
@@ -4060,14 +4060,14 @@ start_server {tags {"hashexpire external:skip"}} {
         
         # Verify no expiry happened immediately after transaction
         assert_equal 2 [r HLEN myhash]
-        assert_equal 0 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        assert_equal 0 [expr {[info_field [r info stats] expired_fields] - $initial_expired}]
         
         # Wait longer than expiry time while paused
         after 600
         
         # Field should still exist because active expiry is paused
         assert_equal 2 [r HLEN myhash]
-        assert_equal 0 [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}]
+        assert_equal 0 [expr {[info_field [r info stats] expired_fields] - $initial_expired}]
         
         # Wait for pause to end
         after 600
@@ -4087,7 +4087,7 @@ start_server {tags {"hashexpire external:skip"}} {
             test "$command active expiry works correctly after $op operation" {
                 r FLUSHALL
                 r SELECT 0
-                set initial_expired [info_field [r info stats] expired_subkeys]
+                set initial_expired [info_field [r info stats] expired_fields]
 
                 r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
                 assert_equal 4 [r HLEN myhash]
@@ -4143,7 +4143,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
     start_server {tags {"hashexpire external:skip"}} {
         test "$command active expiry processes multiple hash keys with different field counts" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             # Create multiple hash keys
             for {set i 1} {$i <= 5} {incr i} {
@@ -4160,7 +4160,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
             wait_for_condition 100 100 {
                 [r HLEN hash1] eq 2 && [r HLEN hash2] eq 1 &&
                 [r HLEN hash3] eq 0 && [r HLEN hash4] eq 2 && [r HLEN hash5] eq 3 &&
-                [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}] eq 7
+                [expr {[info_field [r info stats] expired_fields] - $initial_expired}] eq 7
             } else {
                 fail "Fields should expire across multiple keys"
             }
@@ -4186,7 +4186,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
     start_server {tags {"hashexpire external:skip"}} {
         test "$command handles mixed short and long expiry times across multiple keys" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             r HSET key1 f1 v1 f2 v2 f3 v3
             r HSET key2 f1 v1 f2 v2 f3 v3
@@ -4205,7 +4205,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
             
             wait_for_condition 100 100 {
                 [r HLEN key1] eq 2 && [r HLEN key3] eq 1 &&
-                [r HLEN key4] eq 0 && [expr {[info_field [r info stats] expired_subkeys] - $initial_expired}] eq 6
+                [r HLEN key4] eq 0 && [expr {[info_field [r info stats] expired_fields] - $initial_expired}] eq 6
             } else {
                 fail "Short expiry fields should expire"
             }
@@ -4226,7 +4226,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
 
         test "$command deletes entire keys when all fields expire while preserving partial keys" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             # Create keys where some will be completely deleted
             for {set i 1} {$i <= 4} {incr i} {
@@ -4245,7 +4245,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
                 [r EXISTS delkey1] eq 0 && [r EXISTS delkey2] eq 0 &&
                 [r EXISTS delkey3] eq 0 && [r EXISTS delkey4] eq 0 &&
                 [r HLEN keepkey] eq 1 &&
-                [info_field [r info stats] expired_subkeys] eq [expr {$initial_expired + 5}]
+                [info_field [r info stats] expired_fields] eq [expr {$initial_expired + 5}]
             } else {
                 fail "Keys should be deleted when last field expires"
             }
@@ -4259,7 +4259,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
     start_server {tags {"hashexpire external:skip"}} {
         test "$command active expiry reclaims memory efficiently across multiple large hash keys" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
             
             # Create keys with large values
             set large_value [string repeat "x" 1024]
@@ -4288,7 +4288,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
                 [r HLEN myhash1] eq 5 && [r HLEN myhash2] eq 5 && 
                 [r HLEN myhash3] eq 5 && [r HLEN myhash4] eq 5 &&
                 [r HLEN myhash5] eq 5 &&
-                [info_field [r info stats] expired_subkeys] eq [expr {$initial_expired + 25}]
+                [info_field [r info stats] expired_fields] eq [expr {$initial_expired + 25}]
             } else {
                 fail "25 fields should expire across 5 keys"
             }
@@ -4326,7 +4326,7 @@ start_server {tags {"hashexpire external:skip"}} {
         # 1 key, 1 field
         test "$cmd recreates field with correct value after active expiry deletion" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 1
             assert_equal 1 [r HLEN myhash]
@@ -4345,7 +4345,7 @@ start_server {tags {"hashexpire external:skip"}} {
         # 1 key, 1 field, increment before expiry
         test "$cmd preserves existing TTL when incrementing field value" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 1
             assert_equal 1 [r HLEN myhash]
@@ -4364,7 +4364,7 @@ start_server {tags {"hashexpire external:skip"}} {
         # 1 key, 3 fields, increment multiple fields, expiry on multiple fields
         test "$cmd handles mix of expired and existing fields during increment operations" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 1 f2 2 f3 3
             assert_equal 3 [r HLEN myhash]
@@ -4387,7 +4387,7 @@ start_server {tags {"hashexpire external:skip"}} {
         # 1 key, 3 fields, increment before expiry, then expire
         test "$cmd maintains TTL values when incrementing fields with existing expiry" {
             r FLUSHALL
-            set initial_expired [info_field [r info stats] expired_subkeys]
+            set initial_expired [info_field [r info stats] expired_fields]
 
             r HSET myhash f1 1 f2 2 f3 3
             assert_equal 3 [r HLEN myhash]
@@ -4408,7 +4408,7 @@ start_server {tags {"hashexpire external:skip"}} {
 start_server {tags {"hashexpire external:skip"}} {
     test {HDEL removes both expired and non-expired fields deleting key when empty} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1 f2 v2
         r HEXPIRE myhash 1 FIELDS 1 f1
         wait_for_active_expiry r myhash 1 $initial_expired 1
@@ -4427,7 +4427,7 @@ start_server {tags {"hashexpire external:skip"}} {
 start_server {tags {"hashexpire external:skip"}} {
     test {HPERSIST returns -2 when attempting to persist already expired field} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1
         r HPEXPIRE myhash 50 FIELDS 1 f1
         wait_for_active_expiry r myhash 0 $initial_expired 1
@@ -4438,7 +4438,7 @@ start_server {tags {"hashexpire external:skip"}} {
 
     test {HPEXPIRE works correctly on field after HPERSIST removes its TTL} {
         r FLUSHALL
-        set initial_expired [info_field [r info stats] expired_subkeys]
+        set initial_expired [info_field [r info stats] expired_fields]
         r HSET myhash f1 v1
         r HEXPIRE myhash 10000 FIELDS 1 f1
         r HPERSIST myhash FIELDS 1 f1
