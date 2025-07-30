@@ -119,4 +119,6 @@ void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
 long long ustime(void);
 mstime_t mstime(void);
+void writePointerWithPadding(unsigned char *buf, const void *ptr);
+
 #endif

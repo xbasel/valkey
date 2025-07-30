@@ -1583,3 +1583,12 @@ long long ustime(void) {
 mstime_t mstime(void) {
     return ustime() / 1000;
 }
+
+/* Writes a pointer into an 8 bytes field, padding with zeros on 32bit targets
+ * to ensure a consistent fixed width encoding. */
+void writePointerWithPadding(unsigned char *buf, const void *ptr) {
+    size_t ptr_size = sizeof(ptr); /* 4 on 32‑bit, 8 on 64‑bit */
+    memcpy(buf, &ptr, ptr_size);
+    /* if it is 32-bit system, pad the remaining 4 bytes with zero */
+    if (ptr_size == 4) memset(buf + ptr_size, 0, ptr_size);
+}
