@@ -72,7 +72,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
-int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node);
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
@@ -1692,8 +1692,6 @@ clusterNode *createClusterNode(char *nodename, int flags) {
  * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
  * in big‑endian format, followed by the pointer to the clusterNode. */
 static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsigned char *buf_out) {
-    const size_t node_ptr_pad_bytes = (sizeof(clusterNode *) == 4) ? 4 : 0; // pad on 32-bit
-
     /* Round up to the next second for fewer key splits and quorum grace */
     mstime_t bucketed_time = (report_time / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
 
@@ -1702,8 +1700,7 @@ static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsi
     memcpy(buf_out, &big_endian_time, sizeof(uint64_t));
 
     /* Append the node pointer, plus padding if necessary */
-    memcpy(buf_out + sizeof(uint64_t), &node, sizeof(node));
-    if (node_ptr_pad_bytes) memset(buf_out + sizeof(uint64_t) + sizeof(node), 0, node_ptr_pad_bytes);
+    writePointerWithPadding(buf_out + sizeof(uint64_t), node);
 }
 
 /* Reverses the operation of encodeFailureReportKey, reading back a timestamp
@@ -2783,7 +2780,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
                     if (areInSameShard(sender, server.cluster->importing_slots_from[j])) {
-                        serverLog(LL_NOTICE,
+                        serverLog(LL_VERBOSE,
                                   "Failover occurred in migration source. Update importing "
                                   "source for slot %d to node %.40s (%s) in shard %.40s.",
                                   j, sender->name, sender->human_nodename, sender->shard_id);
@@ -2825,7 +2822,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 (server.cluster->migrating_slots_to[j]->configEpoch < senderConfigEpoch ||
                  nodeIsReplica(server.cluster->migrating_slots_to[j])) &&
                 areInSameShard(server.cluster->migrating_slots_to[j], sender)) {
-                serverLog(LL_NOTICE,
+                serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
@@ -3717,17 +3714,35 @@ int clusterProcessPacket(clusterLink *link) {
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
                              * which is the new primary in the shard. */
-                            int slots = clusterMoveNodeSlots(sender, sender_claimed_primary);
+                            int slots = 0, importing_slots = 0, migrating_slots = 0;
+                            clusterMoveNodeSlots(sender, sender_claimed_primary,
+                                                 &slots, &importing_slots, &migrating_slots);
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
                             sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
-                            serverLog(LL_NOTICE,
-                                      "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
-                                      " failed over to node %.40s (%s) with a config epoch of %llu",
-                                      sender->shard_id, sender->name, sender->human_nodename, slots,
-                                      sender_claimed_primary->name, sender_claimed_primary->human_nodename,
-                                      (unsigned long long)sender_claimed_primary->configEpoch);
+                            if (slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
+                                          " failed over to node %.40s (%s) with a config epoch of %llu",
+                                          sender->shard_id, sender->name, sender->human_nodename, slots,
+                                          sender_claimed_primary->name, sender_claimed_primary->human_nodename,
+                                          (unsigned long long)sender_claimed_primary->configEpoch);
+                            }
+                            if (importing_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration source. Update importing "
+                                          "source of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          importing_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
+                            if (migrating_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration target. Update migrating "
+                                          "target of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          migrating_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
                             serverAssert(sender->numslots == 0);
                         }
                     } else {
@@ -3748,7 +3763,7 @@ int clusterProcessPacket(clusterLink *link) {
                     sender->flags |= CLUSTER_NODE_REPLICA;
 
                     /* Update config and state. */
-                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
                 }
 
                 /* Primary node changed for this replica? */
@@ -5886,18 +5901,43 @@ int clusterDelNodeSlots(clusterNode *node) {
 /* Transfer slots from `from_node` to `to_node`.
  *
  * Iterates over all cluster slots, transferring each slot covered
- * by `from_node` to `to_node`. Counts and returns the number of
- * slots transferred. */
-int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node) {
-    int processed = 0;
+ * by `from_node` to `to_node`. Includes importing slots and migrating
+ * slots. This function currently only called after a failover occurs
+ * within a shard, i.e. moving slots from the old primary to the new
+ * primary. It is a special case of clusterUpdateSlotsConfigWith. */
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots) {
+    serverAssert(areInSameShard(from_node, to_node));
+    int processed = 0, importing_processed = 0, migrating_processed = 0;
+
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (clusterNodeCoversSlot(from_node, j)) {
             clusterDelSlot(j);
             clusterAddSlot(to_node, j);
             processed++;
         }
+
+        if (server.cluster->importing_slots_from[j] == from_node) {
+            serverLog(LL_VERBOSE,
+                      "Failover occurred in migration source. Update importing "
+                      "source for slot %d to node %.40s (%s) in shard %.40s.",
+                      j, to_node->name, to_node->human_nodename, to_node->shard_id);
+            server.cluster->importing_slots_from[j] = to_node;
+            importing_processed++;
+        }
+
+        if (server.cluster->migrating_slots_to[j] == from_node) {
+            serverLog(LL_VERBOSE,
+                      "Failover occurred in migration target."
+                      " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
+                      j, to_node->name, to_node->human_nodename, to_node->shard_id);
+            server.cluster->migrating_slots_to[j] = to_node;
+            migrating_processed++;
+        }
     }
-    return processed;
+
+    if (slots) *slots = processed;
+    if (importing_slots) *importing_slots = importing_processed;
+    if (migrating_slots) *migrating_slots = migrating_processed;
 }
 
 /* Clear the migrating / importing state for all the slots.
