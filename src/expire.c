@@ -195,13 +195,13 @@ static int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
 }
 
-long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
+static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
     if (timelimit_us <= 0) return 0;
 
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
-    unsigned long config_cycle_fast_duration =
+    long long config_cycle_fast_duration =
         ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
     unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - activeExpireEffort();
     unsigned long keys_per_loop =
@@ -229,7 +229,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
          * as the fast cycle total duration itself. */
         if (!state->timelimit_exit && server.stat_expired_stale_perc < config_cycle_acceptable_stale) return 0;
 
-        if (start < state->last_fast_cycle + (long long)config_cycle_fast_duration * 2) return 0;
+        if (start < state->last_fast_cycle + config_cycle_fast_duration * 2) return 0;
 
         state->last_fast_cycle = start;
     }
@@ -245,7 +245,7 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
 
     state->timelimit_exit = false;
 
-    if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) timelimit_us = config_cycle_fast_duration; /* in microseconds. */
+    if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) timelimit_us = min(timelimit_us, config_cycle_fast_duration); /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
      * about the number of keys that are already logically expired, but still
@@ -261,23 +261,23 @@ long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, lon
     for (j = 0; dbs_performed < dbs_per_call && state->timelimit_exit == 0 && j < server.dbnum; j++) {
         /* Scan callback data including expired and checked count per iteration. */
         expireScanData data = {0};
+        /* Increment the DB now so we are sure if we run out of time
+         * in the current DB we'll restart from the next. This allows to
+         * distribute the time evenly across DBs. */
+        serverDb *db = server.db[(state->current_db++ % server.dbnum)];
+        /* In case the current database is not used we can simply skip to the next database. */
+        if (!db) continue;
+
         data.ttl_sum = 0;
         data.ttl_samples = 0;
         data.max_entries = keys_per_loop * 4;
-
-        serverDb *db = server.db[(state->current_db % server.dbnum)];
         data.db = db;
 
         int db_done = 0; /* The scan of the current DB is done? */
         int update_avg_ttl_times = 0, repeat = 0;
 
-        /* Increment the DB now so we are sure if we run out of time
-         * in the current DB we'll restart from the next. This allows to
-         * distribute the time evenly across DBs. */
-        state->current_db++;
+        hashtableScanFunction scan_cb;
 
-        hashtableScanFunction scan_cb = NULL;
-        ;
         kvstore *kvs = NULL;
         if (db) {
             switch (jobType) {
@@ -471,9 +471,6 @@ void activeExpireCycle(int type) {
      * server.hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
     long long timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
-
-    if (timelimit_us <= 0) timelimit_us = 1;
-
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);

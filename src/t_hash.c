@@ -2134,15 +2134,15 @@ size_t hashTypePopExpiredFields(robj *o, mstime_t now, unsigned long max_entries
 /* Hashtable scan callback for hash datatype */
 static void defragHashTypeEntry(void *privdata, void *element_ref) {
     entry **entry_ref = (entry **)element_ref;
-    entry *old_entry = *entry_ref, *new_entry = NULL;
-    long long old_expiry = entryGetExpiry(old_entry);
+    entry *old_entry = *entry_ref;
 
-    new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
+    entry *new_entry = entryDefrag(old_entry, activeDefragAlloc, activeDefragSds);
     if (new_entry) {
+        long long expiry = entryGetExpiry(new_entry);
         /* In case the entry is tracked we need to update it in the volatile set */
-        if (entryHasExpiry(new_entry)) {
+        if (expiry != EXPIRY_NONE) {
             // We don't need to pass the db because db-level tracking isn't going to change for this update.
-            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, expiry, expiry);
         }
         *entry_ref = new_entry;
     }
