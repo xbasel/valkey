@@ -3343,7 +3343,7 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o); /* needed only for freeHashObject */
+void hashTypeFreeVolatileSet(robj *o);         /* needed only for freeHashObject */
 void hashTypeTrackEntry(robj *o, void *entry); /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypePopExpiredFields(robj *o, mstime_t now, unsigned long max_entries, void **out_entries);
