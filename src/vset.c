@@ -257,7 +257,7 @@ pVector *pvInsert(pVector *pv, void *elem, uint32_t pos) {
  *   The updated pVector after removal.
  *   Returns NULL if the last element was removed and the vector was freed. */
 pVector *pvRemoveAt(pVector *pv, uint32_t idx) {
-    if (!pv || pv->len == 0) return pv;
+    assert(pv && pv->len > 0);
     assert(idx < pv->len);
     if (pv->len == 1) {
         /* Last element being removed; delete vector */
@@ -303,7 +303,7 @@ bool pvRemove(pVector **ppv, void *elem) {
  *   A pointer to the element at the given index.
  *   Returns NULL if the vector is NULL or the index is out of bounds. */
 void *pvGet(pVector *vec, uint32_t idx) {
-    if (!vec || idx >= vec->len) return NULL;
+    assert(vec && idx < vec->len);
     return vec->data[idx];
 }
 
