@@ -20,9 +20,6 @@
 #define EXPIRE_GT (1 << 2)
 #define EXPIRE_LT (1 << 3)
 
-/* Maximum number of fields to active-expire (per replicated HDEL command */
-#define EXPIRE_BULK_LIMIT 1024
-
 /* Return values for expireIfNeeded */
 typedef enum {
     KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even nonexistent key. */

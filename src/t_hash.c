@@ -98,7 +98,7 @@ void hashTypeTrackEntry(robj *o, void *entry) {
     serverAssert(added);
 }
 
-void hashTypeUntrackEntry(robj *o, void *entry) {
+static void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
@@ -108,7 +108,7 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
     }
 }
 
-void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
