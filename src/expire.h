@@ -54,7 +54,7 @@ typedef struct serverDb serverDb;
 
 /* return the relevant expiration policy based on the current server state and the provided flags.
  * FLAGS can indicate either:
- * EXPIRE_AVOID_DELETE_EXPIRED - which indicate the command is explicitly executed with the NO_EXPIRE flag. 
+ * EXPIRE_AVOID_DELETE_EXPIRED - which indicate the command is explicitly executed with the NO_EXPIRE flag.
  * EXPIRE_FORCE_DELETE_EXPIRED - which indicate to delete expired keys even in case of a replica (for the writable replicas case) */
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
