@@ -456,7 +456,7 @@ void pvSort(pVector *pv, int (*compare)(const void *a, const void *b)) {
 #define VSET_TAG_MASK 0x7UL
 #define VSET_PTR_MASK (~VSET_TAG_MASK)
 
-// Determine bucket type
+/* Determine bucket type */
 static inline int vsetBucketType(vsetBucket *b) {
     if (b == NULL) return VSET_BUCKET_NONE;
 
