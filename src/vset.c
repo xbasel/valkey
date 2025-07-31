@@ -466,7 +466,7 @@ static inline int vsetBucketType(vsetBucket *b) {
     return bits & VSET_TAG_MASK;
 }
 
-// Access raw pointer
+/* Access raw pointer */
 static inline void *vsetBucketRawPtr(vsetBucket *b) {
     return (void *)((uintptr_t)b & VSET_PTR_MASK);
 }
