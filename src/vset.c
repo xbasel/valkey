@@ -491,7 +491,6 @@ static inline void *vsetBucketSingle(vsetBucket *b) {
     return b;
 }
 
-// Setters
 static inline vsetBucket *vsetBucketFromRawPtr(void *ptr, int type) {
     uintptr_t p = (uintptr_t)ptr;
     return (vsetBucket *)(p | (type & VSET_TAG_MASK));
