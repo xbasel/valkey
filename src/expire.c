@@ -198,11 +198,6 @@ static int activeExpireEffort(void) {
 static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
     if (timelimit_us <= 0) return 0;
 
-    /* Adjust the running parameters according to the configured expire
-     * effort. The default effort is 1, and the maximum configurable effort
-     * is 10. */
-    long long config_cycle_fast_duration =
-        ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
     unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - activeExpireEffort();
     unsigned long keys_per_loop =
         ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP + ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * activeExpireEffort();
@@ -210,9 +205,8 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     typedef struct {
-        unsigned int current_db;  /* Next DB to test. */
-        bool timelimit_exit;      /* Time limit hit in previous call? */
-        monotime last_fast_cycle; /* When last fast cycle ran. */
+        unsigned int current_db; /* Next DB to test. */
+        bool timelimit_exit;     /* Time limit hit in previous call? */
     } expireState;
     static expireState _expire_state[ACTIVE_EXPIRY_TYPE_COUNT] = {0}; // [KEYS, FIELDS]
     expireState *state = &_expire_state[jobType];
@@ -229,13 +223,8 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
          * for time limit, unless the percentage of estimated stale keys is
-         * too high. Also never repeat a fast cycle for the same period
-         * as the fast cycle total duration itself. */
+         * too high. */
         if (!state->timelimit_exit && *expired_stale_perc[jobType] < config_cycle_acceptable_stale) return 0;
-
-        if (start < state->last_fast_cycle + config_cycle_fast_duration * 2) return 0;
-
-        state->last_fast_cycle = start;
     }
 
     /* We usually should test CRON_DBS_PER_CALL per iteration, with
@@ -248,8 +237,6 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     if (dbs_per_call > server.dbnum || state->timelimit_exit) dbs_per_call = server.dbnum;
 
     state->timelimit_exit = false;
-
-    if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) timelimit_us = min(timelimit_us, config_cycle_fast_duration); /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
      * about the number of keys that are already logically expired, but still
@@ -466,17 +453,29 @@ void activeExpireCycle(int type) {
 
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
-     * is 10. */
-    int config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
+     * is 10. Also make sure not to run fast cycles back to back. */
+    long long timelimit_us;
+    if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
+        long long config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
 
+        /* Never repeat a fast cycle for the same period
+         * as the fast cycle total duration itself. */
+        static monotime last_fast_cycle_start_time; /* When last fast cycle ran. */
+        monotime start = getMonotonicUs();
+        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return;
+
+        last_fast_cycle_start_time = start;
+        timelimit_us = config_cycle_fast_duration;
+    } else {
+        /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
+         * time per iteration. Since this function gets called with a frequency of
+         * server.hz times per second, the following is the max amount of
+         * microseconds we can spend in this function. */
+        int config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC + 2 * activeExpireEffort();
+        timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+    }
 
     static bool expireCycleStartWithFields = 0;
-
-    /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
-     * time per iteration. Since this function gets called with a frequency of
-     * server.hz times per second, the following is the max amount of
-     * microseconds we can spend in this function. */
-    const long long timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
     long long elapsed = 0;
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
