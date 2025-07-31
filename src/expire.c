@@ -214,8 +214,12 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
         bool timelimit_exit;      /* Time limit hit in previous call? */
         monotime last_fast_cycle; /* When last fast cycle ran. */
     } expireState;
-    static expireState _expire_state[2] = {0}; // [KEYS, FIELDS]
+    static expireState _expire_state[ACTIVE_EXPIRY_TYPE_COUNT] = {0}; // [KEYS, FIELDS]
     expireState *state = &_expire_state[jobType];
+    double *expired_stale_perc[ACTIVE_EXPIRY_TYPE_COUNT] = {
+        &server.stat_expired_keys_stale_perc,
+        &server.stat_expired_keys_with_vola_stale_perc,
+    };
 
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
@@ -227,7 +231,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
          * for time limit, unless the percentage of estimated stale keys is
          * too high. Also never repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
-        if (!state->timelimit_exit && server.stat_expired_stale_perc < config_cycle_acceptable_stale) return 0;
+        if (!state->timelimit_exit && *expired_stale_perc[jobType] < config_cycle_acceptable_stale) return 0;
 
         if (start < state->last_fast_cycle + config_cycle_fast_duration * 2) return 0;
 
@@ -410,9 +414,11 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     }
 
     long long elapsed = (long long)elapsedUs(start);
-    server.stat_expire_cycle_time_used += elapsed;
-    latencyAddSampleIfNeeded("expire-cycle", elapsed);
-    latencyTraceIfNeeded(db, expire_cycle, elapsed);
+    if (jobType == KEYS)
+        latencyTraceIfNeeded(db, expire_cycle_keys, elapsed);
+    else if (jobType == FIELDS)
+        latencyTraceIfNeeded(db, expire_cycle_fields, elapsed);
+
 
     /* Update our estimate of keys existing but yet to be expired.
      * Running average with this sample accounting for 5%. */
@@ -421,7 +427,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
         current_perc = (double)total_expired / total_sampled;
     } else
         current_perc = 0;
-    server.stat_expired_stale_perc = (current_perc * 0.05) + (server.stat_expired_stale_perc * 0.95);
+    *expired_stale_perc[jobType] = (current_perc * 0.05) + (*expired_stale_perc[jobType] * 0.95);
 
     return elapsed;
 }
@@ -470,19 +476,22 @@ void activeExpireCycle(int type) {
      * time per iteration. Since this function gets called with a frequency of
      * server.hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
-    long long timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+    const long long timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
+    long long elapsed = 0;
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);
 
     if (expireCycleStartWithFields) {
-        timelimit_us -= activeExpireCycleJob(FIELDS, type, timelimit_us);
-        activeExpireCycleJob(KEYS, type, timelimit_us);
+        elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
+        elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
     } else {
-        timelimit_us -= activeExpireCycleJob(KEYS, type, timelimit_us);
-        activeExpireCycleJob(FIELDS, type, timelimit_us);
+        elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
+        elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
     }
-
+    server.stat_expire_cycle_time_used += elapsed;
+    latencyAddSampleIfNeeded("expire-cycle", elapsed);
+    latencyTraceIfNeeded(db, expire_cycle, elapsed);
     expireCycleStartWithFields = !expireCycleStartWithFields;
 }
 

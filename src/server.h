@@ -1747,7 +1747,8 @@ struct valkeyServer {
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */
     long long stat_expiredfields;                  /* Number of expired hash fields */
-    double stat_expired_stale_perc;                /* Percentage of keys probably expired */
+    double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
+    double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
     long long stat_expire_cycle_time_used;         /* Cumulative microseconds used. */
     long long stat_evictedkeys;                    /* Number of evicted keys (maxmemory) */

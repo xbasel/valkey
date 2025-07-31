@@ -15,7 +15,7 @@ start_server {tags {"modules"}} {
         assert_equal [r info.gets replication role] "master"
         assert_equal [r info.getc replication role] "master"
         assert_equal [r info.geti stats expired_keys] 0
-        assert_equal [r info.getd stats expired_stale_perc] 0
+        assert_equal [r info.getd stats expired_keys_stale_perc] 0
 
         # check signed and unsigned
         assert_equal [r info.geti infotest infotest_global] -2
