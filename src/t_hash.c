@@ -582,7 +582,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         return;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        vsetStart(hashTypeGetVolatileSet(subject), &hi->viter);
+        vsetInitIterator(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -593,7 +593,7 @@ void hashTypeResetIterator(hashTypeIterator *hi) {
         if (!hi->volatile_items_iter)
             hashtableResetIterator(&hi->iter);
         else
-            vsetStop(&hi->viter);
+            vsetResetIterator(&hi->viter);
     }
 }
 
