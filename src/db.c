@@ -1965,7 +1965,7 @@ static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to act
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
  * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, entry *fields[]) {
+static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[]) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
@@ -1976,12 +1976,11 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, entr
     argv[argc++] = keyobj;      // key name
     for (size_t i = 0; i < n_fields; i++) {
         // field to delete
-        argv[argc++] = createStringObjectFromSds(entryGetField(fields[i]));
+        argv[argc++] = fields[i];
     }
 
     alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
     server.replication_allowed = prev_replication_allowed;
-
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
@@ -2004,7 +2003,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
     while (max_entries > 0) {
         /* Process in batches to avoid large stack allocations. */
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
-        entry *entries[EXPIRE_BULK_LIMIT];
+        robj *entries[EXPIRE_BULK_LIMIT];
         size_t expired = hashTypePopExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 
@@ -2018,24 +2017,21 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
 
         enterExecutionUnit(1, 0);
         robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+        /* Note that even though if might have been more efficient to only propagate del in case the key has no more items left,
+         * we must keep consistency in order to allow the replica to report hdel notifications before del. */
+        propagateFieldsDeletion(db, o, expired, entries);
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
         if (deleteKey) {
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
-            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
-            signalModifiedKey(NULL, db, keyobj);
         } else {
-            propagateFieldsDeletion(db, o, expired, entries);
-            notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
         }
+        signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();
         postExecutionUnitOperations();
         decrRefCount(keyobj);
-        /* Free all entry memory for a given list of expired entries. */
-        for (size_t i = 0; i < expired; i++) {
-            entryFree(entries[i]);
-        }
 
         total_expired += expired;
         max_entries -= expired;

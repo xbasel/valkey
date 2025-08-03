@@ -5,6 +5,7 @@
 #include "hashtable.h"
 #include "util.h"
 #include "zmalloc.h"
+#include "server.h" // for activeDefragAlloc
 
 #include <string.h>
 #include <stdint.h>

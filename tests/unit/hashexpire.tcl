@@ -4034,7 +4034,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_keyevent_patterns $rd myhash hexpire
             }
             assert_keyevent_patterns $rd_primary myhash hexpired del ; # f4
-            assert_keyevent_patterns $rd_replica myhash del
+            assert_keyevent_patterns $rd_replica myhash hdel del
             $rd_primary close
             $rd_replica close
         }
