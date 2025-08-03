@@ -51,7 +51,7 @@
  *     the entries which currently exists in the set. Because of the semi-sorted ordering this implementation is using, the returned value MIGHT not be the 'real' minimum
  *     but rather some value which is the maximum among a group of entries which are all close or equal to the 'real' minimum.
  *
- *     size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) - can be used
+ *     size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) - can be used
  *     in order to remove up to max_count entries from the vset. The removed entries will all satisfy the condition that their expiration time is smaller than the provided now.
  *     Note that there are no guarantees about the order to the entries.
  *
@@ -66,9 +66,10 @@
  * Note that the vset iterator is NOT safe, Meaning you should not change the set while iterating it. Adding entries and/or removing entries
  * can result in unexpected behavior.! */
 
- /* Returns the absolute expiration time in milliseconds for the provided entry */
+/* Return the absolute expiration time in milliseconds for the provided entry */
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
-
+/* Callback to be optionally provided to vsetPopExpired. when item is removed from the vset this callback will also be applied. */
+typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
 // vset is just a pointer to a bucket
 typedef void *vset;
 
@@ -84,7 +85,7 @@ void vsetResetIterator(vsetIterator *it);
 void vsetInit(vset *set);
 void vsetClear(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
-size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count);
+size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 size_t vsetMemUsage(vset *set);
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));
 
