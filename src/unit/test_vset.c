@@ -52,7 +52,7 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
     TEST_ASSERT(!vsetIsEmpty(&set));
 
     vsetIterator it;
-    vsetStart(&set, &it);
+    vsetInitIterator(&set, &it);
 
     void *entry;
     int count = 0;
@@ -63,7 +63,7 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
 
     TEST_ASSERT(count == 2);
 
-    vsetStop(&it);
+    vsetResetIterator(&it);
     vsetClear(&set);
     mockFreeEntry(e1);
     mockFreeEntry(e2);
@@ -99,7 +99,7 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
 
     // Iterate all entries and count them
     vsetIterator it;
-    vsetStart(&set, &it);
+    vsetInitIterator(&set, &it);
 
     void *entry;
     int count = 0;
@@ -110,7 +110,7 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
     TEST_ASSERT(count == total_entries);
 
     // Cleanup
-    vsetStop(&it);
+    vsetResetIterator(&it);
     vsetClear(&set);
 
     for (int i = 0; i < total_entries; i++) {
@@ -237,7 +237,7 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
     }
 
     vsetIterator it;
-    vsetStart(&set, &it);
+    vsetInitIterator(&set, &it);
 
     int found[5] = {0};
     int total = 0;
@@ -263,7 +263,7 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
         TEST_EXPECT(found[i]);
     }
 
-    vsetStop(&it);
+    vsetResetIterator(&it);
     vsetClear(&set);
     for (int i = 0; i < 5; i++) mockFreeEntry(entries[i]);
 
@@ -321,9 +321,8 @@ long long mock_entry_get_expiry(const void *entry) {
     return mockGetExpiry(entry);
 }
 
-int mock_entry_expire(void *entry, void *ctx) {
+int mock_entry_expire(void *entry, long long now) {
     mock_entry *e = (mock_entry *)entry;
-    long long now = *(long long *)ctx;
     TEST_ASSERT(mock_entry_get_expiry(entry) <= now);
     for (int i = 0; i < mock_entry_count; i++) {
         if (mock_entries[i] == e) {
@@ -394,7 +393,11 @@ int remove_mock_entry(vset *set) {
 
 int expire_mock_entries(vset *set, mstime_t now) {
     // printf("Before expired entries entries: %d\n", mock_entry_count);
-    vsetPopExpired(set, mockGetExpiry, mock_entry_expire, now, mock_entry_count, &now);
+    const int expired_max = mock_entry_count;
+    void *expired_entries[expired_max];
+    size_t expired_count = vsetPopExpired(set, mockGetExpiry, now, expired_entries, expired_max);
+    for (size_t i = 0; i < expired_count; i++)
+        mock_entry_expire(expired_entries[i], now);
     // printf("After expired %zu entries left entries: %d and set is empty: %s\n", count, mock_entry_count, vsetIsEmpty(set) ? "true" : "false");
     return 0;
 }
@@ -452,12 +455,12 @@ int test_vset_defrag(int argc, char **argv, int flags) {
     TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
 
     /* defrag when vector */
-    for (int i = 0; i < VOLATILESET_VECTOR_BUCKET_MAX_SIZE - 1; i++)
+    for (int i = 0; i < 127 - 1; i++)
         insert_mock_entry(&set);
     TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
 
     long long expiry = rand() % 10000 + 100;
-    for (int i = 0; i < VOLATILESET_VECTOR_BUCKET_MAX_SIZE * 2; i++) {
+    for (int i = 0; i < 127 * 2; i++) {
         insert_mock_entry_with_expiry(&set, expiry);
     }
     TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
