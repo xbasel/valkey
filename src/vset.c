@@ -290,7 +290,7 @@ static pVector *pvMakeRoomFor(pVector *pv, size_t additional) {
         pv = zrealloc_usable(pv, required, &required);
     }
     /* Make sure we have the capacity to save the alloation size */
-    assert(required <= (1ULL << PV_ALLOC_BITS) - 1);
+    assert(required <= (size_t)((1ULL << PV_ALLOC_BITS) - 1));
     pv->alloc = required;
     return pv;
 }
