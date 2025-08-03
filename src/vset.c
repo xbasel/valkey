@@ -215,8 +215,8 @@
  *                                pVector Implementation
  *************************************************************************************************************/
 
-static const size_t PV_CARD_BITS = 30;
-static const size_t PV_ALLOC_BITS = 34;
+#define PV_CARD_BITS 30
+#define PV_ALLOC_BITS 34
 
 /* Custom vector structure with embedded allocation and length counters */
 typedef struct {
