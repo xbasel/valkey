@@ -67,7 +67,7 @@
  * Note that the vset iterator is NOT safe, Meaning you should not change the set while iterating it. Adding entries and/or removing entries
  * can result in unexpected behavior.! */
 
- /* Returns the absolute expiration time in milliseconds for the provided entry */
+/* Return the absolute expiration time in milliseconds for the provided entry */
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
 
 // vset is just a pointer to a bucket

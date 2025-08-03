@@ -433,8 +433,7 @@ pVector *pvSplit(pVector **pv_ptr, uint32_t split_index) {
  *   The logical length (`len`) of the returned vector is initialized to 0.
  */
 pVector *pvNew(uint32_t capacity) {
-    pVector *new_vec = NULL;
-    return pvMakeRoomFor(new_vec, capacity);
+    return pvMakeRoomFor(NULL, capacity);
 }
 
 /* Inserts an element at the specified position in the pVector.
