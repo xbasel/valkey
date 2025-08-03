@@ -725,7 +725,7 @@ static inline vsetIterator *opaqueFromIterator(vsetInternalIterator *iterator) {
 }
 
 
-// Determine bucket type
+/* Determine bucket type */
 static inline int vsetBucketType(vsetBucket *b) {
     if (b == NULL) return VSET_BUCKET_NONE;
 
@@ -735,7 +735,7 @@ static inline int vsetBucketType(vsetBucket *b) {
     return bits & VSET_TAG_MASK;
 }
 
-// Access raw pointer
+/* Access raw pointer */
 static inline void *vsetBucketRawPtr(vsetBucket *b) {
     return (void *)((uintptr_t)b & VSET_PTR_MASK);
 }
@@ -760,7 +760,6 @@ static inline void *vsetBucketSingle(vsetBucket *b) {
     return b;
 }
 
-// Setters
 static inline vsetBucket *vsetBucketFromRawPtr(void *ptr, int type) {
     uintptr_t p = (uintptr_t)ptr;
     return (vsetBucket *)(p | (type & VSET_TAG_MASK));
