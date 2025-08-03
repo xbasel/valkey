@@ -1396,27 +1396,28 @@ static inline vsetBucket *removeFromBucket_RAX(vsetGetExpiryFunc getExpiry, vset
     return target;
 }
 
-static inline size_t vsetBucketPopExpired_NONE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+static inline size_t vsetBucketRemoveExpired_NONE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     UNUSED(bucket);
     UNUSED(getExpiry);
+    UNUSED(expiryFunc);
     UNUSED(now);
     UNUSED(max_count);
-    UNUSED(expired);
+    UNUSED(ctx);
     return 0;
 }
 
-static inline size_t vsetBucketPopExpired_SINGLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+static inline size_t vsetBucketRemoveExpired_SINGLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     void *entry = vsetBucketSingle(*bucket);
     if (max_count && getExpiry(entry) <= now) {
-        expired[0] = entry;
         freeVsetBucket(*bucket);
         *bucket = vsetBucketFromNone();
+        if (expiryFunc) expiryFunc(entry, ctx);
         return 1;
     }
     return 0;
 }
 
-static inline size_t vsetBucketPopExpired_VECTOR(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+static inline size_t vsetBucketRemoveExpired_VECTOR(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     pVector *pv = vsetBucketVector(*bucket);
     uint32_t len = min(pvLen(pv), max_count);
     uint32_t i = 0;
@@ -1425,7 +1426,7 @@ static inline size_t vsetBucketPopExpired_VECTOR(vsetBucket **bucket, vsetGetExp
         /* break as soon as the expiryFunc stops us OR we reached an entry which is not expired */
         if (getExpiry(entry) > now)
             break;
-        expired[i] = entry;
+        if (expiryFunc) expiryFunc(entry, ctx);
     }
     pVector *new_pv = pvSplit(&pv, i);
     *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());
@@ -1433,21 +1434,18 @@ static inline size_t vsetBucketPopExpired_VECTOR(vsetBucket **bucket, vsetGetExp
     return i;
 }
 
-static inline size_t vsetBucketPopExpired_HASHTABLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     UNUSED(getExpiry);
     UNUSED(now);
     hashtable *ht = vsetBucketHashtable(*bucket);
     hashtableIterator it;
-    void *entry = NULL;
+    void *entry;
     size_t count = 0;
     hashtableInitIterator(&it, ht, HASHTABLE_ITER_SAFE);
-    while (hashtableNext(&it, &entry)) {
-        if (count < max_count) {
-            hashtableDelete(ht, entry);
-            expired[count++] = entry;
-            entry = NULL;
-        } else
-            break;
+    while (count < max_count && hashtableNext(&it, &entry)) {
+        assert(hashtableDelete(ht, entry));
+        expiryFunc(entry, ctx);
+        count++;
     }
     hashtableResetIterator(&it);
 
@@ -1463,7 +1461,7 @@ static inline size_t vsetBucketPopExpired_HASHTABLE(vsetBucket **bucket, vsetGet
     return count;
 }
 
-static inline size_t vsetBucketPopExpired_RAX(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+static inline size_t vsetBucketRemoveExpired_RAX(vsetBucket **bucket, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     UNUSED(getExpiry);
     rax *buckets = vsetBucketRax(*bucket);
     size_t count = 0;
@@ -1485,13 +1483,13 @@ static inline size_t vsetBucketPopExpired_RAX(vsetBucket **bucket, vsetGetExpiry
             break;
         switch (time_bucket_type) {
         case VSET_BUCKET_SINGLE:
-            count += vsetBucketPopExpired_SINGLE(&time_bucket, vsetGetExpiryZero, now, expired + count, max_count - count);
+            count += vsetBucketRemoveExpired_SINGLE(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
             break;
         case VSET_BUCKET_VECTOR:
-            count += vsetBucketPopExpired_VECTOR(&time_bucket, vsetGetExpiryZero, now, expired + count, max_count - count);
+            count += vsetBucketRemoveExpired_VECTOR(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
             break;
         case VSET_BUCKET_HT:
-            count += vsetBucketPopExpired_HASHTABLE(&time_bucket, vsetGetExpiryZero, now, expired + count, max_count - count);
+            count += vsetBucketRemoveExpired_HASHTABLE(&time_bucket, vsetGetExpiryZero, expiryFunc, now, max_count - count, ctx);
             break;
         default:
             panic("Cannot expire entries from bucket which is not single, vector or hashtable");
@@ -2026,24 +2024,24 @@ bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, vo
  *
  * Return:
  *     Number of expired entries removed (size_t). */
-size_t vsetPopExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now, void **expired, size_t max_count) {
+size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx) {
     vsetBucket *bucket = *set;
     int bucket_type = vsetBucketType(bucket);
     switch (bucket_type) {
     case VSET_BUCKET_NONE:
-        return vsetBucketPopExpired_NONE(set, getExpiry, now, expired, max_count);
+        return vsetBucketRemoveExpired_NONE(set, getExpiry, expiryFunc, now, max_count, ctx);
         break;
     case VSET_BUCKET_RAX:
-        return vsetBucketPopExpired_RAX(set, getExpiry, now, expired, max_count);
+        return vsetBucketRemoveExpired_RAX(set, getExpiry, expiryFunc, now, max_count, ctx);
         break;
     case VSET_BUCKET_SINGLE:
-        return vsetBucketPopExpired_SINGLE(set, getExpiry, now, expired, max_count);
+        return vsetBucketRemoveExpired_SINGLE(set, getExpiry, expiryFunc, now, max_count, ctx);
         break;
     case VSET_BUCKET_VECTOR:
-        return vsetBucketPopExpired_VECTOR(set, getExpiry, now, expired, max_count);
+        return vsetBucketRemoveExpired_VECTOR(set, getExpiry, expiryFunc, now, max_count, ctx);
         break;
     case VSET_BUCKET_HT:
-        return vsetBucketPopExpired_HASHTABLE(set, getExpiry, now, expired, max_count);
+        return vsetBucketRemoveExpired_HASHTABLE(set, getExpiry, expiryFunc, now, max_count, ctx);
         break;
     default:
         panic("Unknown volatile set bucket type in vsetPopExpired");
