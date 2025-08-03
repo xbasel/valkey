@@ -2004,7 +2004,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         /* Process in batches to avoid large stack allocations. */
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
         robj *entries[EXPIRE_BULK_LIMIT];
-        size_t expired = hashTypePopExpiredFields(o, now, batch_size, entries);
+        size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 
         /* Clean up volatile set if no more volatile fields remain */

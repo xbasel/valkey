@@ -3347,7 +3347,7 @@ robj *setTypeDup(robj *o);
 void hashTypeFreeVolatileSet(robj *o);         /* needed only for freeHashObject */
 void hashTypeTrackEntry(robj *o, void *entry); /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
-size_t hashTypePopExpiredFields(robj *o, mstime_t now, unsigned long max_entries, robj **out_fields);
+size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
