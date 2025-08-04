@@ -25,6 +25,8 @@
  * Create/Free:
  *     vsetInit(vset *set) - used in order to initialize a new vset.
  *     void vsetClear(vset *set) - used in order to empty all the data in a vset.
+ *     void vsetRelease(vset *set) - just like vsetClear, but also release the set itself so it will become unusable.
+ *                                   and will require a new call to vsetInit in order to continue using the set.
  *    Example:
  *      vset set;
  *      vsetInit(&set);
@@ -84,6 +86,8 @@ bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetResetIterator(vsetIterator *it);
 void vsetInit(vset *set);
 void vsetClear(vset *set);
+void vsetRelease(vset *set);
+bool vsetIsValid(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 size_t vsetMemUsage(vset *set);

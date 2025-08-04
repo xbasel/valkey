@@ -33,6 +33,7 @@
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
@@ -1211,13 +1212,14 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtableInitIterator(&iter, ht, 0);
             void *next;
 
-            asize = zmalloc_size((void *)o) + hashtableMemUsage(ht) + vsetMemUsage(volatile_fields);
+            asize = zmalloc_size((void *)o) + hashtableMemUsage(ht);
             while (hashtableNext(&iter, &next) && samples < sample_size) {
                 elesize += entryMemUsage(next);
                 samples++;
             }
             hashtableResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }

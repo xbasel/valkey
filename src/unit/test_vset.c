@@ -65,7 +65,7 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
     TEST_ASSERT(count == 2);
 
     vsetResetIterator(&it);
-    vsetClear(&set);
+    vsetRelease(&set);
     mockFreeEntry(e1);
     mockFreeEntry(e2);
 
@@ -112,7 +112,7 @@ int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
 
     // Cleanup
     vsetResetIterator(&it);
-    vsetClear(&set);
+    vsetRelease(&set);
 
     for (int i = 0; i < total_entries; i++) {
         mockFreeEntry(entries[i]);
@@ -265,7 +265,7 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
     }
 
     vsetResetIterator(&it);
-    vsetClear(&set);
+    vsetRelease(&set);
     for (int i = 0; i < 5; i++) mockFreeEntry(entries[i]);
 
     TEST_PRINT_INFO("Iterated all %d mixed expiry entries successfully", total);
@@ -297,7 +297,7 @@ int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
     }
 
     TEST_ASSERT(vsetIsEmpty(&set));
-    vsetClear(&set);
+    vsetRelease(&set);
 
     TEST_PRINT_INFO("Add/remove %d entries, set size now 0", total_entries);
     return 0;
@@ -463,7 +463,7 @@ int test_vset_defrag(int argc, char **argv, int flags) {
     }
     TEST_ASSERT(defrag_vset(&set, 0, 0) == 0);
 
-    vsetClear(&set);
+    vsetRelease(&set);
     free_mock_entries();
 
     return 0;
@@ -505,7 +505,7 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
     /* now expire all the entries and check that we have no entries left */
     expire_mock_entries(&set, LONG_LONG_MAX);
     TEST_ASSERT(vsetIsEmpty(&set) && mock_entry_count == 0);
-    vsetClear(&set);
+    vsetRelease(&set);
     free_mock_entries(); /* Just in case */
     return 0;
 }
