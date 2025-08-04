@@ -42,6 +42,15 @@
 #include <string.h>
 #include "entry.h"
 
+/* enumeration of all the possible return values of commands manipulating fields expiration. */
+typedef enum {
+    /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
+    EXPIRATION_MODIFICATION_NOT_EXIST = -2,       /* in case the provided object is NULL or the specific field was not found */
+    EXPIRATION_MODIFICATION_SUCCESSFUL = 1,       /* if the expiration time was applied or modified */
+    EXPIRATION_MODIFICATION_FAILED_CONDITION = 0, /* if the some predefined conditions (e.g hexpire conditional flags) has not been met */
+    EXPIRATION_MODIFICATION_FAILED = -1,          /* if apply of the expiration modification failed (e.g hpersist on item without expiration) */
+    EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
+} expiryModificationResult;
 
 volatileEntryType hashVolatileEntryType = {
     .entryGetKey = (sds(*)(const void *entry))entryGetField,
@@ -59,8 +68,7 @@ static volatile_set *hashTypeGetVolatileSet(robj *o) {
 
 void hashTypeFreeVolatileSet(robj *o) {
     volatile_set *set = hashTypeGetVolatileSet(o);
-    if (set)
-        freeVolatileSet(set);
+    if (set) freeVolatileSet(set);
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
@@ -73,7 +81,7 @@ static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && !hashTypeHasVolatileElements(o)) {
-            ignore = 0;
+            ignore = true;
         }
         hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
     }
@@ -123,11 +131,11 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
     volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(set);
 
-    if (old_tracked && !new_tracked)
+    if (old_tracked && !new_tracked) {
         serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
-    else if (new_tracked && !old_tracked)
+    } else if (new_tracked && !old_tracked) {
         serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
-    else {
+    } else {
         volatile_set *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
         serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
@@ -422,11 +430,10 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
  * returns -2 in case the provided object is NULL or the specific field was not found.
  * returns 0 if the specified flag conditions has not been met.
  * returns 1 if the expiration time was applied.
- * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired.
- */
-int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
+ * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired. */
+static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
     /* If no object we will return -2 */
-    if (o == NULL) return -2;
+    if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr;
@@ -435,13 +442,13 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
         /* We do not want to convert to listpack for no good reason.
          * So we first check if the item exists.*/
         if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll) < 0) {
-            return -2;
+            return EXPIRATION_MODIFICATION_NOT_EXIST;
         }
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
          * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
-            return 0;
+            return EXPIRATION_MODIFICATION_FAILED_CONDITION;
         } else {
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
@@ -459,14 +466,14 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
             /* NX option is set, check no current expiry */
             if (flag & EXPIRE_NX) {
                 if (current_expire != EXPIRY_NONE) {
-                    return 0;
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
                 }
             }
 
             /* XX option is set, check current expiry */
             if (flag & EXPIRE_XX) {
                 if (current_expire == EXPIRY_NONE) {
-                    return 0;
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
                 }
             }
 
@@ -475,7 +482,7 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
                 /* When current_expire is -1, we consider it as infinite TTL,
                  * so expire command with gt always fail the GT. */
                 if (expiry <= current_expire || current_expire == EXPIRY_NONE) {
-                    return 0;
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
                 }
             }
 
@@ -484,28 +491,28 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
                 /* When current_expire -1, we consider it as infinite TTL,
                  * so if there is an expiry on the key and it's not less than current, we fail the LT. */
                 if (current_expire != EXPIRY_NONE && expiry >= current_expire) {
-                    return 0;
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
                 }
             }
         }
         *entry_ref = entrySetExpiry(current_entry, expiry);
         hashTypeTrackUpdateEntry(o, current_entry, *entry_ref, current_expire, expiry);
-        return 1;
+        return EXPIRATION_MODIFICATION_SUCCESSFUL;
     }
-    return -2; // we did not find anything to do. return -2
+    return EXPIRATION_MODIFICATION_NOT_EXIST; // we did not find anything to do. return -2
 }
 
 
-int hashTypePersist(robj *o, sds field) {
+static expiryModificationResult hashTypePersist(robj *o, sds field) {
     /* NULL object returns -2 */
-    if (o == NULL || o->type != OBJ_HASH) return -2;
+    if (o == NULL || o->type != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         if (hashTypeExists(o, field))
             /* When listpack representation is used, All items are without expiry */
-            return -1;
+            return EXPIRATION_MODIFICATION_FAILED;
         else
-            return -2; // Did not find any element return -2
+            return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
     }
 
     hashtable *ht = o->ptr;
@@ -516,11 +523,11 @@ int hashTypePersist(robj *o, sds field) {
         if (current_expire != EXPIRY_NONE) {
             hashTypeUntrackEntry(o, current_entry);
             *entry_ref = entryUpdate(current_entry, NULL, EXPIRY_NONE);
-            return 1;
+            return EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
-        return -1; // If the found element has no expiration set, return -1
+        return EXPIRATION_MODIFICATION_FAILED; // If the found element has no expiration set, return -1
     }
-    return -2; // Did not find any element return -2
+    return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
 }
 
 /* Delete an element from a hash.
@@ -1402,9 +1409,9 @@ void hgetexCommand(client *c) {
         if (set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
         } else if (set_expiry) {
-            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == 1) ? 1 : 0;
+            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
         } else if (persist) {
-            changed = (hashTypePersist(o, c->argv[i]->ptr) == 1) ? 1 : 0;
+            changed = (hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
         }
         if (changed) {
             changes++;
@@ -1574,7 +1581,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     int flag = 0;
     int fields_index = 3;
     long long num_fields = 0;
-    int i, result = 0, expired = 0, updated = 0;
+    int i, expired = 0, updated = 0;
     int set_expired = 0;
     robj **new_argv = NULL;
     int new_argc = 0;
@@ -1619,18 +1626,18 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     for (i = 0; i < num_fields; i++) {
-        result = -2;
+        expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
         if (set_expired) {
             if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
                 /* In case we deleted the field, add it to the new hdel command vector. */
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
-                result = 2;
+                result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
                 expired++;
             }
         } else {
             result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
-            if (result == 1) updated++;
+            if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) updated++;
         }
         addReplyLongLong(c, result);
     }
@@ -1643,7 +1650,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         } else if (updated) {
             /* Propagate as HPEXPIREAT millisecond-timestamp
              * Only rewrite the command arg if not already HPEXPIREAT */
-            if (c->cmd->proc != hpexpireAtCommand) {
+            if (c->cmd->proc != hpexpireatCommand) {
                 rewriteClientCommandArgument(c, 0, shared.hpexpireat);
             }
 
@@ -1669,7 +1676,7 @@ void hexpireCommand(client *c) {
     hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_SECONDS);
 }
 
-void hexpireAtCommand(client *c) {
+void hexpireatCommand(client *c) {
     hexpireGenericCommand(c, 0, UNIT_SECONDS);
 }
 
@@ -1677,7 +1684,7 @@ void hpexpireCommand(client *c) {
     hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_MILLISECONDS);
 }
 
-void hpexpireAtCommand(client *c) {
+void hpexpireatCommand(client *c) {
     hexpireGenericCommand(c, 0, UNIT_MILLISECONDS);
 }
 
@@ -1719,7 +1726,7 @@ void hpersistCommand(client *c) {
 
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);
-        if (result > 0) {
+        if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
             server.dirty++;
             changes++;
         }

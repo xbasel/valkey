@@ -36,18 +36,27 @@
  *                        value pointer = value sds
  */
 
-/* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
-#define FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY 0
-
-/* SDS aux flag. If set, it indicates that the entry has an embedded value
- * pointer located in memory before the embedded field. If unset, the entry
- * instead has an embedded value located after the embedded field. */
-#define FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR 2
+enum {
+    /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
+    FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY = 0,
+    /* SDS aux flag. If set, it indicates that the entry has an embedded value
+     * pointer located in memory before the embedded field. If unset, the entry
+     * instead has an embedded value located after the embedded field. */
+    FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR = 1,
+    FIELD_SDS_AUX_BIT_MAX
+};
+static_assert(FIELD_SDS_AUX_BIT_MAX < sizeof(char) - SDS_TYPE_BITS, "too many sds bits are used for entry metadata");
 
 /* Returns true in case the entry's value is not embedded in the entry.
  * Returns false otherwise. */
 static inline bool entryHasValuePtr(const entry *entry) {
     return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
+}
+
+/* Returns true in case the entry's value is embedded in the entry.
+ * Returns false otherwise. */
+bool entryHasEmbeddedValue(entry *entry) {
+    return (!entryHasValuePtr(entry));
 }
 
 /* Returns true in case the entry has expiration timestamp.
@@ -101,10 +110,6 @@ void *entryGetAllocPtr(const entry *entry) {
     if (entryHasValuePtr(entry)) buf -= sizeof(sds);
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
     return buf;
-}
-
-bool entryHasEmbeddedValue(entry *entry) {
-    return (!entryHasValuePtr(entry));
 }
 
 /**************************************** Entry Expiry API *****************************************/
@@ -209,17 +214,18 @@ static inline size_t entryReqSize(const_sds field,
     return alloc_size;
 }
 
-/* Takes ownership of value. does not take ownership of field */
-entry *entryCreate(const_sds field, sds value, long long expiry) {
-    bool embed_value = false;
-    int embedded_field_sds_type;
-    size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
-    size_t alloc_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_sds_size, &expiry_size, &embedded_value_sds_size);
-    size_t buf_size;
-
-    /* allocate the buffer */
-    char *buf = zmalloc_usable(alloc_size, &buf_size);
-
+/* Serialize the content of the entry into the provided buffer buf. Make use of the provided arguments provided by a call to entryReqSize.
+ * Note that this function will take ownership of the value so user should not assume it is valid after this call. */
+static entry *entryWrite(char *buf,
+                         size_t buf_size,
+                         const_sds field,
+                         sds value,
+                         long long expiry,
+                         bool embed_value,
+                         int embedded_field_sds_type,
+                         size_t embedded_field_sds_size,
+                         size_t embedded_value_sds_size,
+                         size_t expiry_size) {
     /* Set The expiry if exists */
     if (expiry_size) {
         *(long long *)buf = expiry;
@@ -250,6 +256,20 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
     return new_entry;
 }
 
+/* Takes ownership of value. does not take ownership of field */
+entry *entryCreate(const_sds field, sds value, long long expiry) {
+    bool embed_value = false;
+    int embedded_field_sds_type;
+    size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
+    size_t alloc_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_sds_size, &expiry_size, &embedded_value_sds_size);
+    size_t buf_size;
+
+    /* allocate the buffer */
+    char *buf = zmalloc_usable(alloc_size, &buf_size);
+
+    return entryWrite(buf, buf_size, field, value, expiry, embed_value, embedded_field_sds_type, embedded_field_sds_size, embedded_value_sds_size, expiry_size);
+}
+
 /* Modify the entry's value and/or expiration time.
  * In case the provided value is NULL, will use the existing value. */
 entry *entryUpdate(entry *e, sds value, long long expiry) {
@@ -267,22 +287,22 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     bool embed_value = false;
     int embedded_field_sds_type;
     size_t expiry_size, embedded_value_size, embedded_field_size;
-    size_t required_embedded_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_size, &expiry_size, &embedded_value_size);
+    size_t required_entry_size = entryReqSize(field, value, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_size, &expiry_size, &embedded_value_size);
     size_t current_embedded_allocation_size = entryHasValuePtr(e) ? 0 : entryMemUsage(e);
 
     bool expiry_add_remove = update_expiry && (curr_expiration_time == EXPIRY_NONE || expiry == EXPIRY_NONE); // In case we are toggling expiration
-    bool value_change_encoding = update_value && (embed_value != !entryHasValuePtr(e));                       // In case we change the way value is embedded or not
+    bool value_change_encoding = update_value && (embed_value != entryHasEmbeddedValue(e));                   // In case we change the way value is embedded or not
 
 
-    /* // We will create a new entry in the following cases:
+    /* We will create a new entry in the following cases:
      * 1. In the case were we add or remove expiration.
      * 2. We change the way value is encoded
      * 3. in the case were we are NOT migrating from an embedded entry to an embedded entry with ~the same size. */
     bool create_new_entry = (expiry_add_remove) || (value_change_encoding) ||
-                            (update_value && !entryHasValuePtr(e) &&
-                             !(required_embedded_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
-                               required_embedded_size <= current_embedded_allocation_size &&
-                               required_embedded_size >= current_embedded_allocation_size * 3 / 4));
+                            (update_value && entryHasEmbeddedValue(e) &&
+                             !(required_entry_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
+                               required_entry_size <= current_embedded_allocation_size &&
+                               required_entry_size >= current_embedded_allocation_size * 3 / 4));
 
     if (!create_new_entry) {
         /* In this case we are sure we do not have to allocate new entry, so expiry must already be set. */
@@ -315,16 +335,19 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         if (!update_value) {
             /* Check if the value can be reused. */
             int value_was_embedded = !entryHasValuePtr(e);
-            /* In case the original entry value is embedded WE WILL HAVE TO DUPLICATE IT */
-            if (value_was_embedded)
+            /* In case the original entry value is embedded WE WILL HAVE TO DUPLICATE IT
+             * if not we have to duplicate it, remove it from the original entry since we are going to delete it.*/
+            if (value_was_embedded) {
                 value = sdsdup(value);
-            /* if not we have to duplicate it, remove it from the original entry since we are going to delete it.*/
-            else {
+            } else {
                 sds *value_ref = entryGetValueRef(e);
                 *value_ref = NULL;
             }
         }
-        new_entry = entryCreate(entryGetField(e), value, expiry);
+        /* allocate the buffer for a new entry */
+        size_t buf_size;
+        char *buf = zmalloc_usable(required_entry_size, &buf_size);
+        new_entry = entryWrite(buf, buf_size, entryGetField(e), value, expiry, embed_value, embedded_field_sds_type, embedded_field_size, embedded_value_size, expiry_size);
         debugServerAssert(new_entry != e);
         entryFree(e);
     }

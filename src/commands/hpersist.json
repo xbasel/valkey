@@ -34,7 +34,7 @@
             }
         ],
         "reply_schema": {
-            "description": "List of values associated with the result of setting expiry on the specific fields, in the same order as they are requested.",
+            "description": "List of integer codes indicating the result of setting expiry on each specified field, in the same order as the fields are requested.",
             "type": "array",
             "minItems": 1,
             "items": {
