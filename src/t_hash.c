@@ -58,13 +58,14 @@ typedef enum {
 
 static vset *hashTypeGetVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    return (vset *)hashtableMetadata(o->ptr);
+    vset *set = (vset *)hashtableMetadata(o->ptr);
+    return vsetIsValid(set) ? set : NULL;
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         vset *set = hashTypeGetVolatileSet(o);
-        if (vsetIsValid(set) && !vsetIsEmpty(set))
+        if (set && !vsetIsEmpty(set))
             return true;
     }
     return false;
@@ -75,7 +76,7 @@ bool hashTypeHasVolatileElements(robj *o) {
 static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
-        if (!ignore && !vsetIsValid(hashTypeGetVolatileSet(o))) {
+        if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
             ignore = true;
         }
         hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
@@ -84,7 +85,7 @@ static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
 
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    vset *set = hashtableMetadata(o->ptr);
+    vset *set = (vset *)hashtableMetadata(o->ptr);
     if (!vsetIsValid(set)) {
         vsetInit(set);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
@@ -94,9 +95,8 @@ static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
 }
 
 void hashTypeFreeVolatileSet(robj *o) {
-    vset *set = hashtableMetadata(o->ptr);
-    if (vsetIsValid(set))
-        vsetRelease(set);
+    vset *set = (vset *)hashtableMetadata(o->ptr);
+    if (vsetIsValid(set)) vsetRelease(set);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
     hashTypeIgnoreTTL(o, true);
 }
