@@ -68,7 +68,7 @@
 
 /* Return the absolute expiration time in milliseconds for the provided entry */
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
-/* Callback to be optionally provided to vsetPopExpired. when item is removed from the vset this callback will also be applied. */
+/* Callback to be optionally provided to vsetRemoveExpired. when item is removed from the vset this callback will also be applied. */
 typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
 // vset is just a pointer to a bucket
 typedef void *vset;
