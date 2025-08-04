@@ -62,7 +62,7 @@ static vset *hashTypeGetVolatileSet(robj *o) {
     return vsetIsValid(set) ? set : NULL;
 }
 
-bool hashTypeHasVolatileElements(robj *o) {
+bool hashTypeHasVolatileFields(robj *o) {
     if (o == NULL) return false;
     serverAssert(o->type == OBJ_HASH);
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -2132,7 +2132,7 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     hashTypeIgnoreTTL(o, 1);
 
     vset *vset = hashTypeGetVolatileSet(o);
-    if (vsetIsEmpty(vset)) {
+    if (!vset || vsetIsEmpty(vset)) {
         hashTypeIgnoreTTL(o, 0);
         return 0;
     }
