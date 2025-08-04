@@ -271,7 +271,9 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
 }
 
 /* Modify the entry's value and/or expiration time.
- * In case the provided value is NULL, will use the existing value. */
+ * In case the provided value is NULL, will use the existing value.
+ * Note that the value ownership is moved to this function and the caller should assume the
+ * value is no longer usable after calling this function. */
 entry *entryUpdate(entry *e, sds value, long long expiry) {
     sds field = (sds)e;
     entry *new_entry = NULL;
