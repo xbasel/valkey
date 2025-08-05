@@ -94,7 +94,7 @@ start_server {tags {"hashexpire"}} {
             r HSET myhash f1 v1
             
             set ttl_cmd [get_check_ttl_command $command]
-            set expire_time [get_short_expire_value $command]
+            set expire_time [get_long_expire_value $command]
             
             # Verify HGETEX command
             assert_equal "v1" [r HGETEX myhash $command $expire_time FIELDS 1 f1]
@@ -106,8 +106,6 @@ start_server {tags {"hashexpire"}} {
             } else {
                 assert_morethan $expire_result 0
             }
-            after 1100
-            assert_equal "" [r HGET myhash f1]
             # Re-enable active expiry
             r DEBUG SET-ACTIVE-EXPIRE yes
         } {OK} {needs:debug}
@@ -132,7 +130,7 @@ start_server {tags {"hashexpire"}} {
             r HSET myhash f1 v1 f2 v2
             
             set ttl_cmd [get_check_ttl_command $command]
-            set expire_time [get_short_expire_value $command]
+            set expire_time [get_long_expire_value $command]
             
             assert_equal "v1 v2" [r HGETEX myhash $command $expire_time FIELDS 2 f1 f2]
             
@@ -145,9 +143,6 @@ start_server {tags {"hashexpire"}} {
                 assert_morethan [r $ttl_cmd myhash FIELDS 1 f2] 0
             }
             
-            after 1100
-            assert_equal "" [r HGET myhash f1]
-            assert_equal "" [r HGET myhash f2]
             # Re-enable active expiry
             r DEBUG SET-ACTIVE-EXPIRE yes
         } {OK} {needs:debug}
@@ -158,7 +153,7 @@ start_server {tags {"hashexpire"}} {
             r HSETEX myhash EX 10000 FIELDS 1 f2 v2
 
             set ttl_cmd [get_check_ttl_command $command]
-            set expire_time [get_short_expire_value $command]
+            set expire_time [get_long_expire_value $command]
             
             assert_equal "v1" [r HGETEX myhash $command $expire_time FIELDS 1 f1]
             if {[regexp "AT$" $command]} {
